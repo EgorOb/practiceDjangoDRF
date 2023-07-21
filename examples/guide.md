@@ -86,9 +86,62 @@ from rest_framework.serializers import BaseSerializer, Serializer, \
 
 Код сериализаторов можно посмотреть по пути `venv\Lib\site-packages\rest_framework\serializers.py`
 
-Ниже рассмотрим пару примеров создания сериализаторов.
+Ниже рассмотрим пару примеров создания сериализаторов разными классами на примере одной задачи, создать сериализатор API,
+позволяющего получить все записи блогов.
+
+### Serializer
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(read_only=True)
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField()
+    authors = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    number_of_comments = serializers.IntegerField()
+    number_of_pingbacks = serializers.IntegerField()
+    rating = serializers.FloatField()
+
+    def create(self, validated_data):
+        return Entry.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        instance.headline = validated_data.get('headline', instance.headline)
+        instance.body_text = validated_data.get('body_text', instance.body_text)
+        instance.pub_date = validated_data.get('pub_date', instance.pub_date)
+        instance.mod_date = validated_data.get('mod_date', instance.mod_date)
+        instance.number_of_comments = validated_data.get('number_of_comments', instance.number_of_comments)
+        instance.number_of_pingbacks = validated_data.get('number_of_pingbacks', instance.number_of_pingbacks)
+        instance.rating = validated_data.get('rating', instance.rating)
+        instance.save()
+        return instance
+```
 
 
+### ModelSerializer
 
+```python
+from rest_framework import serializers
+from app.models import Entry
 
+class EntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Entry
+        fields = '__all__'
+```
 
+### HyperlinkedModelSerializer
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = Entry
+        fields = '__all__'
+```

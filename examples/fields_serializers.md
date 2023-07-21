@@ -190,6 +190,73 @@ class MySerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
 ```
 
+* `trim_whitespace` - Указывает, нужно ли удалять пробелы по краям входных данных перед десериализацией поля.
+Если `trim_whitespace` установлен в `True`, пробелы в начале и конце строки будут удалены перед сохранением значения поля.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    name = serializers.CharField(trim_whitespace=True)
+```
+* `coerce_to_string` - Определяет, нужно ли преобразовывать значение поля в строку перед десериализацией.
+Если `coerce_to_string` установлен в `True`, значение будет преобразовано в строку перед десериализацией.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    age = serializers.IntegerField(coerce_to_string=True)
+```
+
+* `localize` - Указывает, следует ли локализовать значение поля при сериализации.
+Если `localize` установлен в `True`, значение будет локализовано, если поле относится к дате или числовому типу с плавающей точкой.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    birth_date = serializers.DateField(localize=True)
+```
+
+* `rounding` - Позволяет управлять округлением числовых значений при сериализации.
+Может принимать значения `'up'`, `'down'`, `'half-up'`, `'half-down'`, `'half-even'`, и `'half-odd'`.
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    price = serializers.DecimalField(max_digits=5, decimal_places=2, rounding='half-up')
+```
+
+* `recursive` - Определяет, следует ли сериализовывать связанные модели рекурсивно или просто включать их первичные ключи.
+Если recursive установлен в True, связанные модели будут сериализованы рекурсивно.
+
+```python
+from rest_framework import serializers
+from .models import Author, Book
+
+class AuthorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Author
+        fields = '__all__'
+
+class BookSerializer(serializers.ModelSerializer):
+    author = AuthorSerializer(recursive=True)
+
+    class Meta:
+        model = Book
+        fields = '__all__'
+```
+* `allow_folders` - Определяет, могут ли поля типа `FileField` принимать значения папок (директорий) при десериализации.
+Если `allow_folders` установлен в `True`, поля `FileField` могут принимать значения папок. Если `False`, значения папок 
+не будут допускаться.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    avatar = serializers.ImageField(allow_folders=True)
+```
 
 ### Поля
 
@@ -204,6 +271,29 @@ class MySerializer(serializers.Serializer):
 * `ChoiceField(choices, html_cutoff=None, 
 html_cutoff_text='More than {count} items...', allow_blank=False, **params)`: Поле для выбора из предопределенных значений.
 
+
+* `CreateOnlyDefault`: Используется для задания значения по умолчанию при создании объекта (POST-запрос), но не при 
+обновлении (PUT-запрос) существующего объекта.
+Такое поле полезно, когда вы хотите установить определенное значение для поля только при создании объекта и не хотите, 
+чтобы оно перезаписывалось при обновлении объекта.
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    created_at = serializers.DateTimeField(default=serializers.CreateOnlyDefault(datetime.now))
+```
+
+* `CurrentUserDefault`: Используется для автоматической установки текущего пользователя (текущего запроса) в поле, 
+например, поле "автор" для объекта.
+Полезно, когда вы хотите автоматически устанавливать значения для определенных полей, например, поля, связанного с 
+текущим пользователем.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.Serializer):
+    author = serializers.CharField(default=serializers.CurrentUserDefault())
+```
 
 * `DateField(format=empty, input_formats=None, **params)`: Поле даты.
 
@@ -258,28 +348,173 @@ html_cutoff_text='More than {count} items...', allow_blank=False, **params)`: П
 * `ListField(child=rest_framework.fields._UnvalidatedField(), allow_empty=True, max_length=None, min_length=None, **params)`: Поле для хранения списков.
 
 
-* `ModelField(model_field, max_length=None, **params)`: Поле для связи с моделью.
+* `ModelField(model_field, max_length=None, **params)`: Поле для связи с моделью. Общее поле, которое можно использовать 
+для произвольного поля модели. `ModelField` используется `ModelSerializer` при работе с пользовательскими полями модели,
+которые не имеют поля сериализатора для сопоставления.
 
 
-* `MultipleChoiceField()`: Поле для выбора из множества предопределенных значений.
+* `MultipleChoiceField(allow_empty=True, **params)`: Поле для выбора из множества предопределенных значений.
 
 
-* `ReadOnlyField()`: Поле только для чтения, не используется при десериализации.
+* `ReadOnlyField(read_only=True, **params)`: Поле только для чтения, не используется при десериализации, просто возвращает значение поля. 
+Если поле представляет собой метод без параметров, метод будет вызван и его возвращаемое значение, используемое в качестве представления.
+
+Например, следующее вызовет `get_expiry_date()` для объекта:
+```python
+from rest_framework.serializers import Serializer, ReadOnlyField
+
+class ExampleSerializer(Serializer):
+        expiry_date = ReadOnlyField(source='get_expiry_date')
+```
+
+* `RegexField(regex, **params)`: Поле для данных, соответствующих заданному регулярному выражению.
 
 
-* `RegexField()`: Поле для данных, соответствующих заданному регулярному выражению.
+* `SerializerMethodField(method_name=None, source='*', read_only=True, **params)`: Поле, использующее метод сериализатора 
+для получения данных. Поле только для чтения, которое получает свое представление от вызова метода на
+родительский класс сериализатора. Вызываемый метод будет иметь вид "get_{field_name}" и должен принимать один аргумент, 
+который является сериализуемый объект.
+
+Пример:
+```python
+from rest_framework.serializers import Serializer, SerializerMethodField
+
+class ExampleSerializer(Serializer):
+    extra_info = SerializerMethodField()
+
+    def get_extra_info(self, obj):
+        return ...  # Вычисление и возвращение
+```
+
+* `SlugField(allow_unicode=False, **params)`: Поле для URL-фрагментов (подходящие под валидацию типа slug).
 
 
-* `SerializerMethodField()`: Поле, использующее метод сериализатора для получения данных.
+* `TimeField(format=empty, input_formats=None, default_timezone=None, **params)`: Поле времени.
 
 
-* `SlugField()`: Поле для URL-фрагментов.
+* `URLField(CharField.__init__(**kwargs))`: Поле URL-адреса.
 
 
-* `TimeField()`: Поле времени.
+* `UUIDField(format='hex_verbose', **params)`: Поле для хранения уникальных идентификаторов UUID.
 
+### Отношения полей
 
-* `URLField()`: Поле URL-адреса.
+Код для отношений полей можно посмотреть по пути `venv\Lib\site-packages\rest_framework\relations.py`
 
+* `RelatedField(queryset=None, **params)`: Является базовым классом для полей, представляющих связанные объекты, и обычно используется для 
+создания настраиваемых полей связи.
+Вы можете создать свой собственный `RelatedField`, чтобы иметь полный контроль над тем, как обрабатываются связанные объекты.
 
-* `UUIDField()`: Поле для хранения уникальных идентификаторов UUID.
+```python
+from rest_framework import serializers
+
+class MyCustomRelatedField(serializers.RelatedField):
+    def to_representation(self, value):
+        # Ваша логика сериализации связанного объекта
+        pass
+
+    def to_internal_value(self, data):
+        # Ваша логика десериализации данных связанного объекта
+        pass
+
+class MySerializer(serializers.ModelSerializer):
+    related_object = MyCustomRelatedField(queryset=RelatedModel.objects.all())
+
+    class Meta:
+        model = MyModel
+        fields = ['related_object', 'name', 'age']
+```
+
+* `PrimaryKeyRelatedField()`: Используется для представления ссылки на связанный объект, используя его первичный ключ.
+Это полезно, когда вы хотите работать со значениями первичных ключей вместо гиперссылок.
+
+```python
+from rest_framework import serializers
+from myapp.models import RelatedModel
+
+class MySerializer(serializers.ModelSerializer):
+    related_object = serializers.PrimaryKeyRelatedField(queryset=RelatedModel.objects.all())
+
+    class Meta:
+        model = MyModel
+        fields = ['related_object', 'name', 'age']
+```
+
+* `ManyRelatedField()`: Используется для сериализации или десериализации списка связанных объектов.
+Полезно, когда вы хотите обрабатывать список связанных объектов, таких как множество объектов, связанных с одним объектом.
+
+```python
+from rest_framework import serializers
+from myapp.models import RelatedModel
+
+class MySerializer(serializers.ModelSerializer):
+    related_objects = serializers.ManyRelatedField(
+        child_relation=serializers.PrimaryKeyRelatedField(queryset=RelatedModel.objects.all())
+    )
+
+    class Meta:
+        model = MyModel
+        fields = ['related_objects', 'name', 'age']
+```
+
+* `SlugRelatedField()`: Используется для связи объекта по его slug-значению.
+Полезно, когда вы хотите связать объекты по их slug-значению вместо первичных ключей.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.ModelSerializer):
+    author = serializers.SlugRelatedField(slug_field='username', queryset=Author.objects.all())
+
+    class Meta:
+        model = MyModel
+        fields = ['author', 'title', 'content']
+```
+
+* `StringRelatedField()`: Используется для представления связанных объектов в виде их строкового представления (str()).
+Это полезно, когда вы хотите, чтобы связанные объекты отображались в виде простых строк, а не сериализовались в сложные объекты.
+
+```python
+from rest_framework import serializers
+from myapp.models import MyModel
+
+class MySerializer(serializers.ModelSerializer):
+    related_object = serializers.StringRelatedField()
+
+    class Meta:
+        model = MyModel
+        fields = ['related_object', 'name', 'age']
+```
+
+* `HyperlinkedRelatedField`: Используется для представления ссылки на связанный объект, используя его URL (гиперссылку).
+Полезно, когда вы хотите, чтобы сериализатор возвращал ссылку на связанный объект вместо его простого представления.
+
+```python
+from rest_framework import serializers
+from myapp.models import RelatedModel, MyModel
+
+class MySerializer(serializers.ModelSerializer):
+    related_object = serializers.HyperlinkedRelatedField(
+        view_name='related-detail',
+        queryset=RelatedModel.objects.all()
+    )
+
+    class Meta:
+        model = MyModel
+        fields = ['related_object', 'name', 'age']
+```
+
+* `HyperlinkedIdentityField()`: Используется для представления ссылки на URL идентификатора объекта 
+(обычно для detail представления объекта) вместо его простого значения.
+Это полезно, когда вы хотите, чтобы сериализатор возвращал ссылку на детали объекта, а не просто его идентификатор.
+
+```python
+from rest_framework import serializers
+
+class MySerializer(serializers.ModelSerializer):
+    url = serializers.HyperlinkedIdentityField(view_name='my-detail')
+
+    class Meta:
+        model = MyModel
+        fields = ['url', 'name', 'age']
+```
