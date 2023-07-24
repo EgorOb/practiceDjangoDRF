@@ -128,7 +128,7 @@ class EntrySerializer(serializers.Serializer):
 from rest_framework import serializers
 from app.models import Entry
 
-class EntrySerializer(serializers.ModelSerializer):
+class EntryModelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Entry
         fields = '__all__'
@@ -140,7 +140,7 @@ class EntrySerializer(serializers.ModelSerializer):
 from rest_framework import serializers
 from app.models import Entry
 
-class EntrySerializer(serializers.HyperlinkedModelSerializer):
+class EntryHyperlinkedModelSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Entry
         fields = '__all__'
