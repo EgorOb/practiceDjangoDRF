@@ -121,6 +121,11 @@ class EntrySerializer(serializers.Serializer):
         return instance
 ```
 
+У объектов сериализаторов есть разные методы 
+
+
+
+
 
 ### ModelSerializer
 

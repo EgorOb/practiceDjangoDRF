@@ -430,15 +430,69 @@ class MySerializer(serializers.ModelSerializer):
 
 ```python
 from rest_framework import serializers
-from myapp.models import RelatedModel
+from app.models import Entry, Blog
+from datetime import date
 
-class MySerializer(serializers.ModelSerializer):
-    related_object = serializers.PrimaryKeyRelatedField(queryset=RelatedModel.objects.all())
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+    
+data = {
+        'blog': "1",
+        'headline': 'Hello World',
+        'body_text': 'This is my first blog post.',
+        'pub_date': '2023-07-19T12:00:00Z',
+    }
 
-    class Meta:
-        model = MyModel
-        fields = ['related_object', 'name', 'age']
+serializer = EntrySerializer(data=data)  # Создали объект сериализатора
+# Проверяем валидацию данных, обязательное условие при сериализации, нужно вызывать проверку
+print(serializer.is_valid())  # True
+
+# serializer.validated_data атрибут, который хранит десериализованные и валидированные данные, полученные из входных данных
+print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>), ('headline', 'Hello World'),
+# ('body_text', 'This is my first blog post.'), ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
+# ('mod_date', datetime.date(2023, 7, 28)), ('number_of_comments', 0), ('number_of_pingbacks', 0), ('rating', 0)])
+
+# serializer.data атрибут, который хранит сериализованные данные, готовые для отправки в ответе API. Эти данные представлены в виде Python-словаря
+print(serializer.data)  # {'blog': 1, 'headline': 'Hello World', 'body_text': 'This is my first blog post.',
+# 'pub_date': '2023-07-19T12:00:00Z', 'mod_date': '2023-07-28', 'number_of_comments': 0, 'number_of_pingbacks': 0,
+# 'rating': 0.0}
+
+"""В data ключ 'blog' c неверной валидацией, так как ожидается ссылка на отношение к ключу строки таблицы БД. Валидация
+проверяет существование ключа, поэтому ключ 0, -1, 100(так как его просто не существует записи в БД по такому ключу)
+не пройдут валидацию"""
+data = {
+    'blog': "rr",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+}
+
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # False
+# serializer.errors атрибут позволяющий посмотреть ошибки, которые возникли в момент валидации
+print(serializer.errors)  # {'blog': [ErrorDetail(string='Incorrect type. Expected pk value, received str.', code='incorrect_type')]}
+print(serializer.validated_data)  # {}
+#  Так как валидация не прошла, то и данные с БД не были подтянуты при сериализации. Данные показывает, те, что были на входе
+print(serializer.data)  # {'blog': rr, 'headline': 'Hello World', 'body_text': 'This is my first blog post.',
+# 'pub_date': '2023-07-19T12:00:00Z'}
+
 ```
+
+Когда вы указываете `queryset=Blog.objects.all()` для поля `serializers.PrimaryKeyRelatedField`, это означает, 
+что вы предоставляете полный QuerySet, который содержит все объекты модели Blog. Такая конструкция используется для того, 
+чтобы позволить выбрать из всех объектов модели тот, который будет связан с текущим объектом, который сериализуется.
+
+Поле `serializers.PrimaryKeyRelatedField` предназначено для представления отношения "многие к одному" (Many-to-One) или
+"один к одному" (One-to-One) в вашем API. Оно позволяет связывать объекты одной модели с объектами другой модели, 
+используя их первичные ключи.
 
 * `ManyRelatedField()`: Используется для сериализации или десериализации списка связанных объектов.
 Полезно, когда вы хотите обрабатывать список связанных объектов, таких как множество объектов, связанных с одним объектом.
