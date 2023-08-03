@@ -858,15 +858,167 @@ print(serializer.errors)  # {}
 он вызывает ошибку, процесс валидации завершится, и остальные валидаторы `не будут выполнены`. 
 Это обеспечивает определенную логику работы валидаторов и предотвращает лишнюю нагрузку при нахождении первой ошибки.
 
+
+
+
+
 На практике редко требуется условие выведения всех ошибок валидаторов за раз. Но если это необходимо, то можно решить данную задачу
-определением всех валидаторов в методе validate сериализатора.
+определением всех валидаторов в методе `validate` сериализатора. Правда использование встроенных валидаторов таких как 
+UniqueValidator, UniqueTogetherValidator, UniqueForYearValidator и т.д. может иметь достаточно специфичный вид.
 
 
 ```python
+from rest_framework import serializers, validators
+from app.models import Entry, Blog, Author
+from datetime import date
 
+
+def authors_validate(value):
+    if len(value['authors']) < 2:
+        raise serializers.ValidationError({'authors': "Число авторов должно быть более 1"})
+    return value
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
+                                                 many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    def validate(self, data):
+        errors = {}
+        # Проверка числа авторов
+        try:
+            authors_validate(data)
+        except serializers.ValidationError as e:
+            for field, error in e.detail.items():
+                errors[field] = error
+
+        # Проверка на уникальность headline
+        unique_validator = validators.UniqueValidator(queryset=Entry.objects.all())
+        try:
+            unique_validator(data.get('headline'), self.fields['headline'])
+        except serializers.ValidationError as e:
+            errors['headline'] = e.detail
+
+        # Вызываем валидатор UniqueTogetherValidator с переданными данными
+        unique_together_validator = serializers.UniqueTogetherValidator(
+            queryset=Entry.objects.all(),
+            fields=['number_of_comments', 'body_text']
+        )
+        try:
+            unique_together_validator(data, self)
+        except serializers.ValidationError as e:
+            errors['non_field_errors'] = e.detail
+
+        # Проверка на уникальность по году
+        unique_year_validator = serializers.UniqueForYearValidator(
+                queryset=Entry.objects.all(),
+                field='rating',
+                date_field='pub_date'
+            )
+        try:
+            unique_year_validator(data, self)
+        except serializers.ValidationError as e:
+            for field, error in e.detail.items():
+                errors[field] = error
+
+        # Если есть хотя бы одна ошибка, то выводим исключение
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return data
+
+
+data = {
+    'blog': "1",
+    'headline': 'Изучение красот Мачу-Пикчу',
+    'body_text': 'Древний город Мачу-Пикчу, скрытый среди гор Анд, привлекает \nпутешественников со всего мира своей '
+                 'уникальной красотой и загадочностью. \nИзучение этого археологического чуда предлагает нам уникальную '
+                 'возможность \nпогрузиться в инковскую культуру и исследовать их удивительные инженерные \nдостижения. '
+                 'Путешественники могут отправиться на треккинговый маршрут, \nподняться на вершину Хуайна Пикчу и '
+                 'насладиться потрясающим видом на \nдревний город. Изучение Мачу-Пикчу - это не только путешествие '
+                 'во времени, \nно и возможность узнать больше о древних цивилизациях и их наследии.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1],
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # False
+print(serializer.errors)  # {'authors': [ErrorDetail(string='Число авторов должно быть более 1', code='invalid')],
+# 'headline': [ErrorDetail(string='This field must be unique.', code='unique')],
+# 'non_field_errors': [ErrorDetail(string='The fields number_of_comments, body_text must make a unique set.', code='unique')],
+# 'rating': [ErrorDetail(string='This field must be unique for the "pub_date" year.', code='unique')]}
 ```
 
 
+2. Атрибут `extra_kwargs` в class Meta: `extra_kwargs` позволяет указать дополнительные параметры и валидаторы для 
+каждого `поля сериализатора`.
+
+```python
+from rest_framework import serializers, validators
+from app.models import Entry, Blog, Author
+from datetime import date
+
+
+def authors_validate(value):
+    if len(value) < 2:
+        raise serializers.ValidationError()
+    return value
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
+                                                 many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    class Meta:
+        extra_kwargs = {
+            'headline': {
+                'validators': [
+                    validators.UniqueValidator(queryset=Entry.objects.all())
+                ],
+            },
+            # 'authors': {
+            #     'validators': [
+            #         authors_validate
+            #     ],
+            #     'error_messages': {
+            #         'authors': "Число авторов должно быть более 1"
+            #     },
+            # }
+        }
+
+data = {
+    'blog': "1",
+    'headline': 'Изучение красот Мачу-Пикчу',
+    'body_text': 'Древний город Мачу-Пикчу, скрытый среди гор Анд, привлекает \nпутешественников со всего мира своей '
+                 'уникальной красотой и загадочностью. \nИзучение этого археологического чуда предлагает нам уникальную '
+                 'возможность \nпогрузиться в инковскую культуру и исследовать их удивительные инженерные \nдостижения. '
+                 'Путешественники могут отправиться на треккинговый маршрут, \nподняться на вершину Хуайна Пикчу и '
+                 'насладиться потрясающим видом на \nдревний город. Изучение Мачу-Пикчу - это не только путешествие '
+                 'во времени, \nно и возможность узнать больше о древних цивилизациях и их наследии.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1],
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # False
+print(serializer.errors)
+```
 
 #### Немного про `read_only=True` и `write_only=True` для связанных полей
 
@@ -1057,8 +1209,9 @@ print(comment)  # объект после редактирования 123@123.c
 класс сериализатора или просто используйте класс сериализатора.
 
 `ModelSerializer` и `HyperlinkedModelSerializer` отличаются от `Serializer`, так как и них основная донастройка производится
-в `class Meta`
+в `class Meta`. Однако, так как они наследуются от `Serializer`, то с ними можно делать тоже самое, что и с `Serializer`
 
+Для работы с `ModelSerializer` в `class Meta` обязательно необходимо указать обязательно 2 поля: `model` и `fields`
 ```python
 from rest_framework import serializers
 from app.models import Entry
@@ -1067,7 +1220,103 @@ class EntryModelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Entry
         fields = '__all__'
+
+
+serializer = EntryModelSerializer()
+print(serializer)
+"""EntryModelSerializer():
+    id = IntegerField(label='ID', read_only=True)
+    headline = CharField(max_length=255)
+    body_text = CharField(style={'base_template': 'textarea.html'})
+    pub_date = DateTimeField(required=False)
+    mod_date = DateField(read_only=True)
+    number_of_comments = IntegerField(required=False)
+    number_of_pingbacks = IntegerField(required=False)
+    rating = FloatField(required=False)
+    blog = PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    authors = PrimaryKeyRelatedField(allow_empty=False, many=True, queryset=Author.objects.all())"""
+
+# Создание новой строки в БД
+data = {
+    'blog': "1",
+    'headline': 'Hello',
+    'body_text': 'World',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2],
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+
+serializer = EntryModelSerializer(data=data)
+print(serializer.is_valid())  # True
+print(repr(serializer.save()))  # <Entry: Hello>
+
+# Обновление строки в БД. Как и в Serializer необходимо указать объект БД который будем изменять, это будет параметр
+# instance
+serializer = EntryModelSerializer(instance=Entry.objects.get(pk=1), data=data)
+print(serializer.is_valid())  # True
+print(repr(serializer.save()))  # <Entry: Hello> Обновление строки в таблице Entry с id ключа 1, тот что передавали в instance
 ```
+
+Если необходимо поменять поле или добавить валидаторов, как на примере Serializer, то это можно сделать абсолютно также
+как и в Serializer.
+
+```python
+from rest_framework import serializers, validators
+from app.models import Entry
+
+def authors_validate(value):
+    if len(value['authors']) < 2:
+        raise serializers.ValidationError({'authors': "Число авторов должно быть более 1"})
+    return value
+
+class EntryModelSerializer(serializers.ModelSerializer):
+    headline = serializers.CharField(validators=[
+        validators.UniqueValidator(queryset=Entry.objects.all())
+    ])
+
+    def validate(self, attrs):
+        return authors_validate(attrs)
+
+    class Meta:
+        model = Entry
+        fields = '__all__'
+        validators = [
+            # Валидация на совместное уникальное значение по полям number_of_comments и body_text таблицы Entry
+            serializers.UniqueTogetherValidator(
+                queryset=Entry.objects.all(),
+                fields=['number_of_comments', 'body_text']
+            ),
+            # Валидация на уникальное значение поля rating при годе взятом из поля pub_date таблицы Entry
+            serializers.UniqueForYearValidator(
+                queryset=Entry.objects.all(),
+                field='rating',
+                date_field='pub_date'
+            )
+        ]
+
+
+data = {
+    'blog': "1",
+    'headline': 'Изучение красот Мачу-Пикчу',
+    'body_text': 'Древний город Мачу-Пикчу, скрытый среди гор Анд, привлекает \nпутешественников со всего мира своей '
+                 'уникальной красотой и загадочностью. \nИзучение этого археологического чуда предлагает нам уникальную '
+                 'возможность \nпогрузиться в инковскую культуру и исследовать их удивительные инженерные \nдостижения. '
+                 'Путешественники могут отправиться на треккинговый маршрут, \nподняться на вершину Хуайна Пикчу и '
+                 'насладиться потрясающим видом на \nдревний город. Изучение Мачу-Пикчу - это не только путешествие '
+                 'во времени, \nно и возможность узнать больше о древних цивилизациях и их наследии.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1],
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+
+serializer = EntryModelSerializer(data=data)
+print(serializer)
+print(serializer.is_valid())  # False
+print(serializer.errors)  # {'rating': [ErrorDetail(string='This field must be unique for the "pub_date" year.', code='unique')]}
+```
+
 
 ### HyperlinkedModelSerializer
 
@@ -1083,10 +1332,136 @@ class EntryModelSerializer(serializers.ModelSerializer):
 from rest_framework import serializers
 from app.models import Entry
 
+
 class EntryHyperlinkedModelSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Entry
         fields = '__all__'
+
+
+serializer = EntryHyperlinkedModelSerializer()
+print(serializer)
+"""EntryHyperlinkedModelSerializer():
+    url = HyperlinkedIdentityField(view_name='entry-detail')
+    headline = CharField(max_length=255)
+    body_text = CharField(style={'base_template': 'textarea.html'})
+    pub_date = DateTimeField(required=False)
+    mod_date = DateField(read_only=True)
+    number_of_comments = IntegerField(required=False)
+    number_of_pingbacks = IntegerField(required=False)
+    rating = FloatField(required=False)
+    blog = HyperlinkedRelatedField(queryset=Blog.objects.all(), view_name='blog-detail')
+    authors = HyperlinkedRelatedField(allow_empty=False, many=True, queryset=Author.objects.all(), view_name='author-detail')"""
+
+# Создание новой строки в БД
+data = {
+    'blog': "1",
+    'headline': 'Hello',
+    'body_text': 'World',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2],
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+
+serializer = EntryHyperlinkedModelSerializer(data=data)
+print(serializer.is_valid())  # False
+print(serializer.errors)  # {'blog': [ErrorDetail(string='Invalid hyperlink - No URL match.', code='no_match')],
+# 'authors': [ErrorDetail(string='Incorrect type. Expected URL string, received int.', code='incorrect_type')]}
+
+# В этом кроется основное отличие от ModelSerializer, так как в HyperlinkedModelSerializer для связанных полей
+# передаются не id, а url по которым обрабатываются данные объекты
+
+data = {
+    'blog': 'http://example.com/blogs/1/',  # Гиперссылка на блог с id=1
+    'headline': 'Hello',
+    'body_text': 'World',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': ['http://example.com/authors/1/', 'http://example.com/authors/2/'], # Гиперссылки на авторов с id=1 и id=2
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+
+serializer = EntryHyperlinkedModelSerializer(data=data)
+print(serializer.is_valid())  # False
+# Однако даже сейчас будет ошибка так как нет обработчика корректно отрабатывающего по приведенным ссылкам.
+# Гиперссылки/URL должны указывать на конкретные представления (view) в вашем приложении,
+# которые обрабатывают соответствующие запросы.
+print(serializer.errors)  # {'blog': [ErrorDetail(string='Invalid hyperlink - No URL match.', code='no_match')],
+# 'authors': [ErrorDetail(string='Invalid hyperlink - No URL match.', code='no_match')]}
 ```
 
-### Настройка класса Meta у ModelSerializer и HyperlinkedModelSerializer
+```python
+from django.shortcuts import render, HttpResponse
+from django.views import View
+from .models import Blog, Author
+
+class BlogDetail(View):
+    def get(self, request, pk):
+        data = Blog.objects.filter(pk=pk).values('name', 'tagline')
+        return HttpResponse(data)
+
+class AuthorDetail(View):
+    def get(self, request, pk):
+        data = Author.objects.filter(pk=pk).values('name', 'email')
+        return HttpResponse(data)
+
+```
+```python
+from django.contrib import admin
+from django.urls import path, include
+from app.views import BlogDetail, AuthorDetail
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
+    path('blogs/<int:pk>/', BlogDetail.as_view(), name='blog-detail'),  # URL для представления BlogDetail
+    path('authors/<int:pk>/', AuthorDetail.as_view(), name='author-detail'),  # URL для представления AuthorDetail
+]
+```
+
+
+
+### Настройка класса Meta у Serializer, ModelSerializer и HyperlinkedModelSerializer
+
+В классе Meta у сериализатора можно определить различные параметры для управления его поведением. 
+Вот некоторые из наиболее распространенных параметров и их описание:
+
+* `model`: Указывает на модель, с которой связан данный сериализатор. 
+Этот параметр используется в `ModelSerializer` и `HyperlinkedModelSerializer`. Используется в ModelSerializer для 
+автоматического создания сериализатора на основе модели.
+
+* `fields`: Определяет список полей, которые будут включены в сериализатор. Если нет конкретных полей, то указывается 
+`fields = '__all__'`
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Entry
+        fields = ['headline', 'body_text', 'pub_date']
+        
+```
+
+* `exclude`: Определяет список полей, которые нужно исключить из сериализатора. 
+Этот параметр применяется только в `ModelSerializer`.
+
+* `read_only_fields`: Определяет список полей, которые должны быть только для чтения (read-only). 
+Значения этих полей будут проигнорированы при десериализации.
+
+* `write_only_fields`: Определяет список полей, которые должны быть только для записи (write-only). 
+Значения этих полей будут проигнорированы при сериализации.
+
+* `validators`: Определяет список валидаторов, которые будут применены к данным сериализатора.
+
+* `list_serializer_class`: Указывает на класс, который будет использован для сериализации списков. Этот параметр можно использовать для определения своего класса, расширяющего стандартный ListSerializer.
+
+* `extra_kwargs`: Позволяет указать дополнительные аргументы и параметры для каждого поля сериализатора. Например, это может включать переопределение валидаторов или управление поведением полей.
+
+* `error_messages`: Позволяет указать пользовательские сообщения об ошибках для каждого поля сериализатора.
+
+* `model_serializer_field_mapping`: Позволяет определить соответствия между полями модели и соответствующими полями в сериализаторе. Этот параметр используется в ModelSerializer и позволяет настроить соответствие полей вручную.
+
+* `serializer_related_field`: Указывает на класс, который будет использоваться для сериализации связанных моделей. Этот параметр используется в ModelSerializer.
