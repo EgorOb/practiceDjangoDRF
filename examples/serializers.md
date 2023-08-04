@@ -1391,7 +1391,12 @@ print(serializer.errors)  # {'blog': [ErrorDetail(string='Invalid hyperlink - No
 # 'authors': [ErrorDetail(string='Invalid hyperlink - No URL match.', code='no_match')]}
 ```
 
+Чтобы это поправить необходимо создать корректные обработчики view и зарегистрировать их url
+
+Для примера можно написать простейший обработчик в приложении `app` файле `views.py`
+
 ```python
+# app.views
 from django.shortcuts import render, HttpResponse
 from django.views import View
 from .models import Blog, Author
@@ -1405,8 +1410,11 @@ class AuthorDetail(View):
     def get(self, request, pk):
         data = Author.objects.filter(pk=pk).values('name', 'email')
         return HttpResponse(data)
-
 ```
+Далее зарегистрируем в `urls.py` в папке `project`. Можно идти по стандартному пути (создать urls.py в приложении app,
+затем прописать там пути и уже затем зарегистрировать их в `urls.py` в папке `project`), но для экономии действий пропишу
+в `urls.py` в папке `project`
+
 ```python
 from django.contrib import admin
 from django.urls import path, include
@@ -1419,8 +1427,130 @@ urlpatterns = [
     path('authors/<int:pk>/', AuthorDetail.as_view(), name='author-detail'),  # URL для представления AuthorDetail
 ]
 ```
+Видно что мы используем пространство имен, допустим `name='blog-detail'` или `name='author-detail'` имена взяты из описания
+сериализатора, вырезка из код выше про сериализатор 
+```python
+print(serializer)
+"""EntryHyperlinkedModelSerializer():
+    url = HyperlinkedIdentityField(view_name='entry-detail')
+    headline = CharField(max_length=255)
+    body_text = CharField(style={'base_template': 'textarea.html'})
+    pub_date = DateTimeField(required=False)
+    mod_date = DateField(read_only=True)
+    number_of_comments = IntegerField(required=False)
+    number_of_pingbacks = IntegerField(required=False)
+    rating = FloatField(required=False)
+    blog = HyperlinkedRelatedField(queryset=Blog.objects.all(), view_name='blog-detail')
+    authors = HyperlinkedRelatedField(allow_empty=False, many=True, queryset=Author.objects.all(), view_name='author-detail')"""
+```
+У `blog` и `authors` в HyperlinkedRelatedField автоматически передаётся `view_name` именно это значение необходимо 
+передать в `name` при регистрации.
+
+Однако можно самостоятельно указать своё имя обработчика, но придётся явно указать поле. Допустим
+
+```python
+class EntryHyperlinkedModelSerializer(HyperlinkedModelSerializer):
+    blog = HyperlinkedRelatedField(queryset=Blog.objects.all(), view_name='my_detail')
+    class Meta:
+        model = Entry
+        fields = '__all__'
+```
+Тогда при регистрации можно в параметр `name` передать `'my_detail'`. Как пример.
+
+```python
+path('blogs/<int:pk>/', BlogDetail.as_view(), name='my_detail')
+```
+После регистрации обработчиков теперь тот же код у сериализатора будет нормально отрабатывать. Сохранение и обновление
+аналогично ModelSerializer
+
+```python
+from rest_framework import serializers
+from app.models import Entry
 
 
+class EntryHyperlinkedModelSerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = Entry
+        fields = '__all__'
+
+
+serializer = EntryHyperlinkedModelSerializer()
+print(serializer)
+"""EntryHyperlinkedModelSerializer():
+    url = HyperlinkedIdentityField(view_name='entry-detail')
+    headline = CharField(max_length=255)
+    body_text = CharField(style={'base_template': 'textarea.html'})
+    pub_date = DateTimeField(required=False)
+    mod_date = DateField(read_only=True)
+    number_of_comments = IntegerField(required=False)
+    number_of_pingbacks = IntegerField(required=False)
+    rating = FloatField(required=False)
+    blog = HyperlinkedRelatedField(queryset=Blog.objects.all(), view_name='blog-detail')
+    authors = HyperlinkedRelatedField(allow_empty=False, many=True, queryset=Author.objects.all(), view_name='author-detail')"""
+
+# Создание новой строки в БД
+data = {
+    'blog': "1",
+    'headline': 'Hello',
+    'body_text': 'World',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2],
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+
+serializer = EntryHyperlinkedModelSerializer(data=data)
+print(serializer.is_valid())  # False
+print(serializer.errors)  # {'blog': [ErrorDetail(string='Invalid hyperlink - No URL match.', code='no_match')],
+# 'authors': [ErrorDetail(string='Incorrect type. Expected URL string, received int.', code='incorrect_type')]}
+
+# В этом кроется основное отличие от ModelSerializer, так как в HyperlinkedModelSerializer для связанных полей
+# передаются не id, а url по которым обрабатываются данные объекты
+
+data = {
+    'blog': 'http://example.com/blogs/1/',  # Гиперссылка на блог с id=1
+    'headline': 'Hello',
+    'body_text': 'World',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': ['http://example.com/authors/1/', 'http://example.com/authors/2/'], # Гиперссылки на авторов с id=1 и id=2
+    'number_of_comments': 2,
+    'rating': 0.0,
+}
+
+# Создание объекта в БД
+serializer = EntryHyperlinkedModelSerializer(data=data)
+print(serializer.is_valid())  # True  Хотя при проходе через http://example.com/authors/1/ ничего не обработается,
+# но обработчик получил значения из БД.
+print(serializer.validated_data)  # OrderedDict([('headline', 'Hello'), ('body_text', 'World'),
+# ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
+# ('number_of_comments', 2), ('rating', 0.0), ('blog', <Blog: Путешествия по миру>),
+# ('authors', [<Author: alexander89>, <Author: ekaterina_blog>])])
+print(repr(serializer.save()))  # <Entry: Hello>
+
+# Обновление объекта в БД
+instance = Entry.objects.get(pk=1)
+serializer = EntryHyperlinkedModelSerializer(instance=instance, data=data)
+print(serializer.is_valid())  # True
+print(repr(serializer.save()))  # <Entry: Hello>
+```
+
+По умолчанию `HyperlinkedRelatedField` не выполняет проверку домена, и позволяет использовать любой домен, 
+лишь бы соответствовал ожидаемому паттерну для связанных данных. В нашем примере, ожидается паттерн 'blogs/<int:pk>/'
+для поля `blog`, и 'authors/<int:pk>/' для каждого значения поля `authors`.
+
+Это поведение допустимо, так как `HyperlinkedRelatedField` предназначен для работы с гиперссылками на связанные объекты. 
+Он использует гиперссылки для представления связей между объектами вместо простых идентификаторов. 
+При десериализации, `HyperlinkedRelatedField` преобразует переданные URL в соответствующие объекты на основе паттернов 
+URL, и поэтому он не требует ограничения на домен.
+
+Однако, если вы хотите добавить проверку домена и разрешить использовать только определенные домены в URL, 
+вы можете провести валидацию по полю или объекту, как описывалось ранее.
+
+Например с использованием `validate()`
+
+```python
+
+```
 
 ### Настройка класса Meta у Serializer, ModelSerializer и HyperlinkedModelSerializer
 
