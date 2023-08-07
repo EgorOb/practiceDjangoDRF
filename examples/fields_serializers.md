@@ -1,8 +1,9 @@
 ## Типы полей которые можно задать в сериализаторе.
 
-В основном используется в случае использовании базового `Serializer` из `rest_framework.serializers`
+В основном используется в случае использовании базового `Serializer` из `rest_framework.serializers`, но также можно 
+переопределить поля для работы с `ModelSerializer` и `HyperlinkedModelSerializer`
 
-### Параметры которые можно передавать в поля
+### 1. Параметры которые можно передавать в поля
 Базовый блок который будет определяться как `**params`
 
 * `read_only=False` - Указывает, что поле доступно только для чтения (сериализации) и не будет приниматься при десериализации данных.
@@ -258,7 +259,7 @@ class MySerializer(serializers.Serializer):
     avatar = serializers.ImageField(allow_folders=True)
 ```
 
-### Поля
+### 2. Поля сериализатора
 
 Код для полей можно посмотреть по пути `venv\Lib\site-packages\rest_framework\fields.py`
 
@@ -397,7 +398,7 @@ class ExampleSerializer(Serializer):
 
 * `UUIDField(format='hex_verbose', **params)`: Поле для хранения уникальных идентификаторов UUID.
 
-### Отношения полей
+### 3. Поля сериализатора, описывающее отношения с другими полями
 
 Код для отношений полей можно посмотреть по пути `venv\Lib\site-packages\rest_framework\relations.py`
 
@@ -494,6 +495,12 @@ print(serializer.data)  # {'blog': rr, 'headline': 'Hello World', 'body_text': '
 "один к одному" (One-to-One) в вашем API. Оно позволяет связывать объекты одной модели с объектами другой модели, 
 используя их первичные ключи.
 
+Но если использовать параметр `many=True`, как в 
+```python
+authors = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+```
+то можно работать с отношениями "многие ко многому"(Many-to-Many)
+
 * `ManyRelatedField()`: Используется для сериализации или десериализации списка связанных объектов.
 Полезно, когда вы хотите обрабатывать список связанных объектов, таких как множество объектов, связанных с одним объектом.
 
@@ -539,6 +546,9 @@ class MySerializer(serializers.ModelSerializer):
         model = MyModel
         fields = ['related_object', 'name', 'age']
 ```
+
+Поля с гиперссылками имеют специфичное представление и их сложно отделить от общего представления. Частично рассмотрены
+в `serializers.md` при рассмотрении `HyperlinkedModelSerializers`
 
 * `HyperlinkedRelatedField`: Используется для представления ссылки на связанный объект, используя его URL (гиперссылку).
 Полезно, когда вы хотите, чтобы сериализатор возвращал ссылку на связанный объект вместо его простого представления.
