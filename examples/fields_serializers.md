@@ -431,8 +431,9 @@ class MySerializer(serializers.ModelSerializer):
 
 ```python
 from rest_framework import serializers
-from app.models import Entry, Blog
+from app.models import Entry, Blog, Author
 from datetime import date
+
 
 class EntrySerializer(serializers.Serializer):
     blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
@@ -440,51 +441,36 @@ class EntrySerializer(serializers.Serializer):
     body_text = serializers.CharField()
     pub_date = serializers.DateTimeField()
     mod_date = serializers.DateField(default=date.today())
-    authors = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    authors = serializers.PrimaryKeyRelatedField(many=True, queryset=Author.objects.all())
     number_of_comments = serializers.IntegerField(default=0)
     number_of_pingbacks = serializers.IntegerField(default=0)
     rating = serializers.FloatField(default=0)
-    
+
+
 data = {
-        'blog': "1",
-        'headline': 'Hello World',
-        'body_text': 'This is my first blog post.',
-        'pub_date': '2023-07-19T12:00:00Z',
-    }
+    'blog': "1",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
 
 serializer = EntrySerializer(data=data)  # Создали объект сериализатора
 # Проверяем валидацию данных, обязательное условие при сериализации, нужно вызывать проверку
 print(serializer.is_valid())  # True
 
 # serializer.validated_data атрибут, который хранит десериализованные и валидированные данные, полученные из входных данных
-print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>), ('headline', 'Hello World'),
-# ('body_text', 'This is my first blog post.'), ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
-# ('mod_date', datetime.date(2023, 7, 28)), ('number_of_comments', 0), ('number_of_pingbacks', 0), ('rating', 0)])
+print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>),
+# ('headline', 'Hello World'), ('body_text', 'This is my first blog post.'),
+# ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
+# ('mod_date', datetime.date(2023, 8, 8)),
+# ('authors', [<Author: alexander89>, <Author: ekaterina_blog>, <Author: maxim_writer>]),
+# ('number_of_comments', 0), ('number_of_pingbacks', 0), ('rating', 0)])
 
 # serializer.data атрибут, который хранит сериализованные данные, готовые для отправки в ответе API. Эти данные представлены в виде Python-словаря
 print(serializer.data)  # {'blog': 1, 'headline': 'Hello World', 'body_text': 'This is my first blog post.',
-# 'pub_date': '2023-07-19T12:00:00Z', 'mod_date': '2023-07-28', 'number_of_comments': 0, 'number_of_pingbacks': 0,
-# 'rating': 0.0}
-
-"""В data ключ 'blog' c неверной валидацией, так как ожидается ссылка на отношение к ключу строки таблицы БД. Валидация
-проверяет существование ключа, поэтому ключ 0, -1, 100(так как его просто не существует записи в БД по такому ключу)
-не пройдут валидацию"""
-data = {
-    'blog': "rr",
-    'headline': 'Hello World',
-    'body_text': 'This is my first blog post.',
-    'pub_date': '2023-07-19T12:00:00Z',
-}
-
-serializer = EntrySerializer(data=data)
-print(serializer.is_valid())  # False
-# serializer.errors атрибут позволяющий посмотреть ошибки, которые возникли в момент валидации
-print(serializer.errors)  # {'blog': [ErrorDetail(string='Incorrect type. Expected pk value, received str.', code='incorrect_type')]}
-print(serializer.validated_data)  # {}
-#  Так как валидация не прошла, то и данные с БД не были подтянуты при сериализации. Данные показывает, те, что были на входе
-print(serializer.data)  # {'blog': rr, 'headline': 'Hello World', 'body_text': 'This is my first blog post.',
-# 'pub_date': '2023-07-19T12:00:00Z'}
-
+# 'pub_date': '2023-07-19T12:00:00Z', 'mod_date': '2023-08-08',
+# 'authors': [1, 2, 3], 'number_of_comments': 0, 'number_of_pingbacks': 0, 'rating': 0.0}
 ```
 
 Когда вы указываете `queryset=Blog.objects.all()` для поля `serializers.PrimaryKeyRelatedField`, это означает, 
@@ -497,55 +483,110 @@ print(serializer.data)  # {'blog': rr, 'headline': 'Hello World', 'body_text': '
 
 Но если использовать параметр `many=True`, как в 
 ```python
-authors = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+authors = serializers.PrimaryKeyRelatedField(many=True, queryset=Author.objects.all())
 ```
-то можно работать с отношениями "многие ко многому"(Many-to-Many)
+то можно работать с отношениями "многие ко многому"(Many-to-Many). В исходном коде написано, что при использовании
+`many=True` возвращается объект `ManyRelatedField()` с правильной записью. Так что `PrimaryKeyRelatedField(many=True)` и
+`ManyRelatedField()` равнозначны.
 
 * `ManyRelatedField()`: Используется для сериализации или десериализации списка связанных объектов.
-Полезно, когда вы хотите обрабатывать список связанных объектов, таких как множество объектов, связанных с одним объектом.
 
 ```python
 from rest_framework import serializers
-from myapp.models import RelatedModel
+from app.models import Entry, Blog, Author
+from datetime import date
 
-class MySerializer(serializers.ModelSerializer):
-    related_objects = serializers.ManyRelatedField(
-        child_relation=serializers.PrimaryKeyRelatedField(queryset=RelatedModel.objects.all())
-    )
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    # Поменяли предыдущую запись на ManyRelatedField
+    authors = serializers.ManyRelatedField(child_relation=serializers.PrimaryKeyRelatedField(queryset=Author.objects.all()))
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
 
-    class Meta:
-        model = MyModel
-        fields = ['related_objects', 'name', 'age']
+data = {
+    'blog': "1",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
+
+# Результат далее ничем не отличается от примера ранее
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # True
+print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>),
+# ('headline', 'Hello World'), ('body_text', 'This is my first blog post.'),
+# ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
+# ('mod_date', datetime.date(2023, 8, 8)),
+# ('authors', [<Author: alexander89>, <Author: ekaterina_blog>, <Author: maxim_writer>]),
+# ('number_of_comments', 0), ('number_of_pingbacks', 0), ('rating', 0)])
+print(serializer.data)  # {'blog': 1, 'headline': 'Hello World', 'body_text': 'This is my first blog post.',
+# 'pub_date': '2023-07-19T12:00:00Z', 'mod_date': '2023-08-08',
+# 'authors': [1, 2, 3], 'number_of_comments': 0, 'number_of_pingbacks': 0, 'rating': 0.0}
 ```
 
-* `SlugRelatedField()`: Используется для связи объекта по его slug-значению.
-Полезно, когда вы хотите связать объекты по их slug-значению вместо первичных ключей.
+* `SlugRelatedField()`: Используется для связи объекта по его slug-значению. Поле для чтения и записи, которое представляет 
+цель отношения по уникальному атрибуту 'slug'.
+Полезно, когда вы хотите связать объекты по их slug-значению вместо первичных ключей. Параметр `slug_field` связывает
+входные данные с нужным полем.
 
 ```python
 from rest_framework import serializers
+from app.models import Blog, Author
 
-class MySerializer(serializers.ModelSerializer):
-    author = serializers.SlugRelatedField(slug_field='username', queryset=Author.objects.all())
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    # Связали автора по его email
+    author = serializers.SlugRelatedField(slug_field='email', queryset=Author.objects.all())
 
-    class Meta:
-        model = MyModel
-        fields = ['author', 'title', 'content']
+
+data = {
+    'blog': "1",
+    'author': 'alexander89@gmail.com',
+}
+
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # True
+print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>),
+# ('author', <Author: alexander89>)])
+print(serializer.data)  # {'blog': 1, 'author': 'alexander89@gmail.com'}
 ```
 
 * `StringRelatedField()`: Используется для представления связанных объектов в виде их строкового представления (str()).
+Поле только для чтения, которое представляет свои цели, используя их простое строковое представление.
 Это полезно, когда вы хотите, чтобы связанные объекты отображались в виде простых строк, а не сериализовались в сложные объекты.
+
+Исходный код `StringRelatedField`
+![img_2.png](img_2.png)
 
 ```python
 from rest_framework import serializers
-from myapp.models import MyModel
+from app.models import Entry, Blog
 
-class MySerializer(serializers.ModelSerializer):
-    related_object = serializers.StringRelatedField()
+# поле blog через PrimaryKeyRelatedField
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
 
-    class Meta:
-        model = MyModel
-        fields = ['related_object', 'name', 'age']
+serializer = EntrySerializer(Entry.objects.get(id=4))
+print(serializer.data)  # {'blog': 1}
+
+# поле blog через StringRelatedField
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.StringRelatedField()
+
+serializer = EntrySerializer(Entry.objects.get(id=4))
+print(serializer.data)  # {'blog': 'Путешествия по миру'}
 ```
+Поле blog с `StringRelatedField` изменилось так как в модели `Blog` при вызове `__str__` возвращается `self.name`
+
+![img_3.png](img_3.png)
+
+#### Поля с гиперссылками
 
 Поля с гиперссылками имеют специфичное представление и их сложно отделить от общего представления. Частично рассмотрены
 в `serializers.md` при рассмотрении `HyperlinkedModelSerializers`

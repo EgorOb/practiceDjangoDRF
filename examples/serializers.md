@@ -53,7 +53,355 @@ from rest_framework.serializers import BaseSerializer, Serializer, \
 
 Код сериализаторов можно посмотреть по пути `venv\Lib\site-packages\rest_framework\serializers.py`
 
-### 1. Методы и атрибуты объекта сериализатора
+### 1. Работа с сериализатором
+В общем случае объявление сериализатора выглядит следующим образом:
+
+#### 1.1 Объявление класса сериализатора
+
+Объявляем класс сериализатор, наследуемся от базового класса который нам необходим 
+и прописываем внутри необходимые поля для сериализации(по этим полям будут формироваться JSON от объекта).
+Ниже приведен урезанный сериализатор для модели Entry что есть в БД. Объекты полей по названию очень похожи с БД, только идут из 
+serializers. Параметры которые можно передавать при формировании полей и доступные поля описаны в `fields_serializers.md`
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+```
+
+#### 1.2 Создание объекта сериализатора
+
+В конструктор сериализатора можно передавать как данные в формате словаря, так и объекты у которых структура совпадает с
+определением полей в сериализаторе(поля одинаково названы и похожие типы, чтобы можно было их трансформировать).
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+
+
+# Создаём объект сериализатора
+serializer = EntrySerializer()
+print(serializer)
+"""
+EntrySerializer():
+    headline = CharField()
+    body_text = CharField()
+"""
+```
+
+Если необходимо передать данные в сериализатор, то это всегда делается через инициализацию.
+
+Есть несколько способов инициализировать сериализатор с данными:
+1. Передача данных в словаре с последующей валидацией данных. Для этого объект словаря инициализируется с параметром `data`.
+А для дальнейшей сериализации и десериализации необходимо вызвать метод `is_valid()` который запустит механизм валидации
+входных данных.
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+
+# Входные данные
+data = {'headline': 'headline',
+        'body_text': 'body_text'}
+
+# Создаём объект сериализатора
+serializer = EntrySerializer(data=data)
+print(serializer)
+"""
+EntrySerializer(data={'headline': 'headline', 'body_text': 'body_text'}):
+    headline = CharField()
+    body_text = CharField()
+"""
+# Валидируем входные данные
+print(serializer.is_valid())  # True
+# Данные готовые для сериализации (формирования JSON)
+print(serializer.data)  # {'headline': 'headline', 'body_text': 'body_text'}
+# Десериализованные валидированные данные (объекты Python для дальнейного создания или обновления объектов)
+print(serializer.validated_data)  # OrderedDict([('headline', 'headline'), ('body_text', 'body_text')])
+```
+
+2. Передача объекта у которого атрибуты называются аналогично как и поля сериализатора, это может быть объект БД Django или
+любой другой объект Python. На этот раз происходит передача объекта при инициализации и вызов `is_valid()` уже не нужен, так как подразумевается что данные внутри объекта Python валидные. Сериализатор будет
+трансформировать только те данные в объекте, поля которых описаны в сериализаторе. 
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+
+# Создаём объект сериализатора на базе объекта БД
+serializer = EntrySerializer(Entry.objects.get(pk=3))
+print(serializer)
+"""
+EntrySerializer(<Entry: Знакомство с Парижем>):
+    headline = CharField()
+    body_text = CharField()
+"""
+
+# Данные готовые для сериализации (формирования JSON). Хотя в объекте БД много полей, но сериализуются только те, что
+# описаны в сериализаторе
+print(serializer.data)  # {'headline': 'Знакомство с Парижем',
+# 'body_text': 'Париж - город любви, искусства и изысканности. \nЗнакомство с Парижем - это погружение в его узкие
+# улочки, исторические \nдостопримечательности и культурную сцену. Прогулка по набережной Сены, \nпосещение Эйфелевой
+# башни, музея Лувр и собора Парижской Богоматери - \nэто всего лишь некоторые из знаковых мест, которые стоит посетить.
+# \nПарижские кафе, булочные и рестораны предлагают богатство французской \nкухни и возможность насладиться неповторимой
+# атмосферой этого \nудивительного города.'}
+
+# Параметра validated_data при таком подходе нет, так как не было валидации.
+
+# Можно передать не только объект БД, но и любой объект Python с требуемой структурой(чтобы названия атрибутов
+# совпадали с полями сериализатора)
+
+# Без разницы классовые или экземплярные атрибуты, главное чтобы из можно было вызвать у объекта
+class EntryClass:
+    body_text = 'body_text'
+
+    def __init__(self, headline, time):
+        self.headline = headline
+        self.time = time
+
+object_entry = EntryClass('headline', 100)
+serializer = EntrySerializer(object_entry)
+print(serializer)
+"""
+EntrySerializer(<__main__.EntryClass object>):
+    headline = CharField()
+    body_text = CharField()
+"""
+
+print(serializer.data)  # {'headline': 'headline', 'body_text': 'body_text'}
+```
+
+3. Передача блока данных через итерируемый объект. Допустим queryset. В таком случае передаётся данный итерируемый объект
+и параметр `many=True` говорящий о том, что передаётся несколько объектов.
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+
+# Создаём объект сериализатора на базе queryset
+serializer = EntrySerializer(Entry.objects.filter(pk__lt=4), many=True)
+print(serializer)
+"""
+EntrySerializer(<QuerySet [<Entry: Изучение красот Мачу-Пикчу>, 
+<Entry: Приключения в Амазонке>, 
+<Entry: Знакомство с Парижем>]>, 
+many=True):
+    headline = CharField()
+    body_text = CharField()
+"""
+
+print(serializer.data)  # [
+# OrderedDict(
+# [('headline', 'Изучение красот Мачу-Пикчу'),
+# ('body_text', 'Древний город Мачу-Пикчу....')]),
+# OrderedDict(
+# [('headline', 'Приключения в Амазонке'),
+# ('body_text', 'Амазонка - это не просто река,...')]),
+# OrderedDict(
+# [('headline', 'Знакомство с Парижем'),
+# ('body_text', 'Париж - город любви, искусства и изысканности...')])
+# ]
+
+# При передачи данных также можно использовать параметр many, только тогда данные должны быть в каком нибудь контейнере
+data = [
+    {'headline': 'headline', 'body_text': 'body_text'},
+    {'headline': 'headline1', 'body_text': 'body_text1'},
+    {'headline': 'headline2', 'body_text': 'body_text2'},
+]
+
+serializer = EntrySerializer(data=data, many=True)
+print(serializer)
+"""
+EntrySerializer(data=[{'headline': 'headline', 'body_text': 'body_text'}, 
+{'headline': 'headline1', 'body_text': 'body_text1'}, 
+{'headline': 'headline2', 'body_text': 'body_text2'}], many=True):
+    headline = CharField()
+    body_text = CharField()
+"""
+print(serializer.is_valid())  # True
+
+print(serializer.data)  # [
+# OrderedDict([('headline', 'headline'), ('body_text', 'body_text')]),
+# OrderedDict([('headline', 'headline1'), ('body_text', 'body_text1')]),
+# OrderedDict([('headline', 'headline2'), ('body_text', 'body_text2')])
+# ]
+
+print(serializer.validated_data) # [
+# OrderedDict([('headline', 'headline'), ('body_text', 'body_text')]),
+# OrderedDict([('headline', 'headline1'), ('body_text', 'body_text1')]),
+# OrderedDict([('headline', 'headline2'), ('body_text', 'body_text2')])
+# ]
+
+# C объектами Python аналогично, главное, чтобы объект был итерируемым
+class EntryClass:
+    body_text = 'body_text'
+
+    def __init__(self, headline, time):
+        self.headline = headline
+        self.time = time
+
+
+object_entry = [EntryClass('headline', 100), EntryClass('headline1', 101), EntryClass('headline2', 102)]
+serializer = EntrySerializer(object_entry, many=True)
+print(serializer)
+"""
+EntrySerializer([<__main__.EntryClass object>, <__main__.EntryClass object>, <__main__.EntryClass object>], many=True):
+    headline = CharField()
+    body_text = CharField()
+"""
+
+print(serializer.data)  # [
+# OrderedDict([('headline', 'headline'), ('body_text', 'body_text')]),
+# OrderedDict([('headline', 'headline1'), ('body_text', 'body_text')]),
+# OrderedDict([('headline', 'headline2'), ('body_text', 'body_text')])
+# ]
+```
+
+#### 1.3 Самостоятельная(если это необходимо) сериализация в JSON и десериализация
+
+Чтобы сериализовать в Json можно воспользоваться `JSONRenderer` или как пример стандартной библиотекой json
+
+Пример на базе множественной сериализации объекта Python
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+
+class EntryClass:
+    body_text = 'body_text'
+
+    def __init__(self, headline, time):
+        self.headline = headline
+        self.time = time
+
+object_entry = [EntryClass('headline', 100), EntryClass('headline1', 101), EntryClass('headline2', 102)]
+serializer = EntrySerializer(object_entry, many=True)
+print(serializer)
+"""
+EntrySerializer([<__main__.EntryClass object>, <__main__.EntryClass object>, <__main__.EntryClass object>], many=True):
+    headline = CharField()
+    body_text = CharField()
+"""
+
+print(serializer.data)  # [
+# OrderedDict([('headline', 'headline'), ('body_text', 'body_text')]),
+# OrderedDict([('headline', 'headline1'), ('body_text', 'body_text')]),
+# OrderedDict([('headline', 'headline2'), ('body_text', 'body_text')])
+# ]
+
+from rest_framework.renderers import JSONRenderer
+
+print(JSONRenderer().render(serializer.data))  # b'[
+# {"headline":"headline","body_text":"body_text"},
+# {"headline":"headline1","body_text":"body_text"},
+# {"headline":"headline2","body_text":"body_text"}]'
+
+import json
+
+print(json.dumps(serializer.data, ensure_ascii=False).encode())  # Результат аналогичный выше
+
+# Для десериализации из Json можно воспользоваться JSONParser или как пример стандартной библиотекой json
+data_json = JSONRenderer().render(serializer.data)
+import io
+from rest_framework.parsers import JSONParser
+
+stream = io.BytesIO(data_json)
+data = JSONParser().parse(stream)  # JSONParser читает объекты потока
+print(data)  # [
+# {'headline': 'headline', 'body_text': 'body_text'},
+# {'headline': 'headline1', 'body_text': 'body_text'},
+# {'headline': 'headline2', 'body_text': 'body_text'}
+# ]
+
+print(json.loads(data_json.decode()))  # Результат аналогичный выше
+```
+
+#### 1.4 Создание и обновление объекта на базе входных данных с использованием сериализатора
+
+Если стоит задача создания или обновления объекта на базе входных данных, то у сериализатора необходимо переопределить
+методы `create(self, validated_data)` или `update(self, instance, validated_data)` в которых необходимо описать какой объект 
+возвращается в случае создания и обновления.
+
+Рассмотрим пример на базе объекта Python. Про работу с объектом БД описано в пункте `4. Применение Serializer` и он мало
+чем отличается от приведённого здесь подхода.
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+
+class EntryClass:
+    def __init__(self, body_text, headline, time):
+        self.headline = headline
+        self.body_text = body_text
+        self.time = time
+
+    def __str__(self):
+        return f"{self.headline}_{self.body_text}"
+
+class EntrySerializer(serializers.Serializer):
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+
+    def create(self, validated_data):
+        """
+        Переопределяем для возможности создать объект на базе валидированных данных
+        """
+        return EntryClass(time=100, **validated_data)
+
+    def update(self, instance, validated_data):
+        """
+        Переопределяем для возможности обновить объект на базе валидированных данных
+        """
+        instance.body_text = validated_data.get('body_text', instance.body_text)
+        instance.headline = validated_data.get('headline', instance.headline)
+        return instance
+
+# Создание нового объекта
+data = {
+    "headline": "HEADLINE",
+    "body_text": "BODY",
+    "body": "b",
+}
+serializer = EntrySerializer(data=data)
+
+if serializer.is_valid():
+    # Создание нового объекта EntryClass
+    print(serializer.save())  # HEADLINE_BODY
+
+# Для обновления какого-то объекта обязательно необходимо передать этот объект или передать его в параметр instance
+
+obj = EntryClass("B", "H", 100)
+print(obj)  # H_B
+serializer = EntrySerializer(obj, data=data)  # Или так serializer = EntrySerializer(instance=obj, data=data)
+if serializer.is_valid():
+    # Обновление переданного объекта obj
+    print(serializer.save())  # HEADLINE_BODY
+# Проверка, что объект изменил данные
+print(obj)  # HEADLINE_BODY
+```
+
+### 2. Методы и атрибуты объекта сериализатора
 
 У объектов сериализаторов есть разные методы:
 
@@ -204,434 +552,12 @@ class MySerializer(serializers.Serializer):
 
 И другие атрибуты
 
-### 2. Примеры использования сериализаторов
-
-Ниже рассмотрим пару примеров создания сериализаторов разными классами на примере 
-одной задачи, `создать сериализатор API, позволяющего получить все записи блогов`.
-
-### 3. Применение Serializer
-
-Ниже приведен пример для случая сериализации, без возможности создания или обновления
-объекта БД.
-
-```python
-from rest_framework import serializers
-from app.models import Blog, Author, Entry
-from datetime import date
-
-class EntrySerializer(serializers.Serializer):
-    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
-    headline = serializers.CharField()
-    body_text = serializers.CharField()
-    pub_date = serializers.DateTimeField()
-    mod_date = serializers.DateField(default=date.today())
-    # Для работы с поле много ко многому указываем many=True
-    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
-                                                 many=True)
-    number_of_comments = serializers.IntegerField(default=0)
-    number_of_pingbacks = serializers.IntegerField(default=0)
-    rating = serializers.FloatField(default=0)
-
-# Можно передавать объекты БД
-serializer = EntrySerializer(Entry.objects.get(pk=3))
-print(serializer.data)  # {'blog': 1, 'headline': 'Знакомство с Парижем', 'body_text':
-# 'Париж - город любви, искусства и изысканности. \nЗнакомство с Парижем - это погружение в его узкие улочки,
-# исторические \nдостопримечательности и культурную сцену. Прогулка по набережной Сены, \nпосещение Эйфелевой башни,
-# музея Лувр и собора Парижской Богоматери - \nэто всего лишь некоторые из знаковых мест, которые стоит посетить.
-# \nПарижские кафе, булочные и рестораны предлагают богатство французской \nкухни и возможность насладиться неповторимой
-# атмосферой этого \nудивительного города.', 'pub_date': '2022-06-01T21:00:00Z', 'mod_date': '2023-07-17',
-# 'authors': [2, 4, 6], 'number_of_comments': 7, 'number_of_pingbacks': 5, 'rating': 4.7}
-
-# Чтобы сериализовать в Json можно воспользоваться JSONRenderer или как пример стандартной библиотекой json
-from rest_framework.renderers import JSONRenderer
-print(JSONRenderer().render(serializer.data))
-import json
-print(json.dumps(serializer.data, ensure_ascii=False).encode())  # Результат аналогичный выше
-
-# Для десериализации из Json можно воспользоваться JSONParser или как пример стандартной библиотекой json
-data_json = JSONRenderer().render(serializer.data)
-import io
-from rest_framework.parsers import JSONParser
-stream = io.BytesIO(data_json)
-data = JSONParser().parse(stream)  # JSONParser читает объекты потока
-print(data)  # {'blog': 1, 'headline': 'Знакомство с Парижем', 'body_text': 'Париж - город любви, искусства и изысканности.
-# \nЗнакомство с Парижем - это погружение в его узкие улочки, исторические \nдостопримечательности и культурную сцену.
-# Прогулка по набережной Сены, \nпосещение Эйфелевой башни, музея Лувр и собора Парижской Богоматери - \nэто всего лишь
-# некоторые из знаковых мест, которые стоит посетить. \nПарижские кафе, булочные и рестораны предлагают богатство французской
-# \nкухни и возможность насладиться неповторимой атмосферой этого \nудивительного города.',
-# 'pub_date': '2022-06-01T21:00:00Z', 'mod_date': '2023-07-17', 'authors': [2, 4, 6], 'number_of_comments': 7,
-# 'number_of_pingbacks': 5, 'rating': 4.7}
-
-print(json.loads(data_json.decode()))  # Результат аналогичный выше
-
-"""Также можно передавать непосредственно данные, но механизм сериализатора устроен так, что если передаются данные,
-то их необходимо предварительно валидировать и затем произойдут дальнейшие необходимые запросы в БД
-Если данные не валидны, то атрибут validated_data будет пустым"""
-data = {
-    'blog': "1",
-    'headline': 'Hello World',
-    'body_text': 'This is my first blog post.',
-    'pub_date': '2023-07-19T12:00:00Z',
-    'authors': [1, 2, 3],
-}
-
-serializer = EntrySerializer(data=data)
-print(serializer.is_valid())  # True. Без вызова is_valid не получится получить validated_data или errors
-print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>),
-# ('headline', 'Hello World'), ('body_text', 'This is my first blog post.'),
-# ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
-# ('mod_date', datetime.date(2023, 7, 30)),
-# ('authors', [<Author: alexander89>, <Author: ekaterina_blog>, <Author: maxim_writer>]),
-# ('number_of_comments', 0), ('number_of_pingbacks', 0), ('rating', 0)])
-print(serializer.data)  # {'blog': 1, 'headline': 'Hello World',
-# 'body_text': 'This is my first blog post.', 'pub_date': '2023-07-19T12:00:00Z',
-# 'mod_date': '2023-07-30', 'authors': [1, 2, 3], 'number_of_comments': 0,
-# 'number_of_pingbacks': 0, 'rating': 0.0}
-
-"""В data ключ 'blog' c неверной валидацией, так как ожидается ссылка на отношение к ключу строки таблицы БД. Валидация
-проверяет существование ключа, поэтому ключ 0, -1, 100(так как его просто не существует записи в БД по такому ключу)
-не пройдут валидацию"""
-data = {
-    'blog': "rr",
-    'headline': 'Hello World',
-    'body_text': 'This is my first blog post.',
-    'pub_date': '2023-07-19T12:00:00Z',
-    'authors': [1, 2, 3],
-}
-
-serializer = EntrySerializer(data=data)
-print(serializer.is_valid())  # False
-print(serializer.errors)  # {'blog': [ErrorDetail(string='Incorrect type. 
-# Expected pk value, received str.', code='incorrect_type')]}
-print(serializer.validated_data)  # {}
-#  Так как валидация не прошла, то и данные с БД не были подтянуты при сериализации. Данные показывает, те, что были на входе
-print(serializer.data)  # {'blog': 'rr', 'headline': 'Hello World',
-# 'body_text': 'This is my first blog post.', 'pub_date': '2023-07-19T12:00:00Z',
-# 'authors': [1, 2, 3]}
-```
-
-Если необходимо иметь возможность создания или обновления объекта БД(или вашей модели) после валидации, 
-то необходимо переопределить методы`create(self, validated_data)` или 
-`update(self, instance, validated_data)` в которых необходимо описать какой объект 
-возвращается в случае создания и обновления.
-
-#### Создание объекта в БД
-
-Если экземпляр сериализатора создан с использованием данных из запроса или 
-другого источника (например, `serializer = MySerializer(data=request.data)`), 
-и эти данные проходят валидацию (метод `is_valid()` возвращает `True`), 
-то DRF выполняет создание нового объекта в базе данных с использованием метода 
-`create()` сериализатора.
-
-```python
-from rest_framework import serializers
-from app.models import Entry, Blog, Author
-from datetime import date
-
-class EntrySerializer(serializers.Serializer):
-    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
-    headline = serializers.CharField()
-    body_text = serializers.CharField()
-    pub_date = serializers.DateTimeField()
-    mod_date = serializers.DateField(default=date.today())
-    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
-                                                 many=True)
-    number_of_comments = serializers.IntegerField(default=0)
-    number_of_pingbacks = serializers.IntegerField(default=0)
-    rating = serializers.FloatField(default=0)
-
-    def create(self, validated_data):
-        # Так как есть связь многое ко многому, то создание объекта будет немного специфичное
-        # Необходимо будет из данных как-то удалить authors и создать объект, а затем заполнить authors
-        # Или передавать каждый параметр без authors
-        authors = validated_data["authors"]
-        validated_data.pop("authors")  # Удаляем авторов из словаря
-        instance = Entry(**validated_data)  # Создаём объект
-        instance.save()  # Сохраняем в БД
-        instance.authors.set(authors)  # Заполняем все в связи многое ко многому
-        return instance
-        """
-        Если бы не было связей много ко многому, то можно было бы записать так вместо всех строк
-        return Entry.objects.create(**validated_data)"""
-
-data = {
-    'id': 1,
-    'blog': "1",
-    'headline': 'Hello World',
-    'body_text': 'This is my first blog post.',
-    'pub_date': '2023-07-19T12:00:00Z',
-    'authors': [1, 2, 3],
-}
-
-serializer = EntrySerializer(data=data)
-if serializer.is_valid():
-    print(repr(serializer.save()))  # <Entry: Hello World>
-    """То что мы указали в данных 'id': "1" не вызовет обновление данных, 
-    создастся новая строка в БД. 
-    Для обновления данных есть немного другая запись"""
-```
-
-То что мы указали в данных 'blog': "1" не вызовет обновление данных, создастся 
-новая строка в БД. Для обновления данных есть немного другая запись.
-
-#### Обновление объекта в БД
-
-Если экземпляр сериализатора создан с существующим объектом из базы данных 
-(например, `serializer = MySerializer(instance=my_instance)`), и обновляемые данные 
-проходят валидацию, то DRF выполняет обновление существующего объекта в базе данных 
-с использованием метода `update()` сериализатора. 
-
-Именно наличие `instance` при инициализации сериализатора определяет что будет 
-обновление, а не создание нового объекта.
-
-Допустим объявим сразу и `create` и `update`, а решение будем принимать исходя 
-из наличия `id` блога в принимаемых данных.
-
-```python
-from rest_framework import serializers
-from app.models import Entry, Blog, Author
-from datetime import date
-
-class EntrySerializer(serializers.Serializer):
-    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
-    headline = serializers.CharField()
-    body_text = serializers.CharField()
-    pub_date = serializers.DateTimeField()
-    mod_date = serializers.DateField(default=date.today())
-    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
-                                                 many=True)
-    number_of_comments = serializers.IntegerField(default=0)
-    number_of_pingbacks = serializers.IntegerField(default=0)
-    rating = serializers.FloatField(default=0)
-
-    def create(self, validated_data):
-        # Так как есть связь многое ко многому, то создание объекта будет немного специфичное
-        # Необходимо будет из данных как-то удалить authors и создать объект, а затем заполнить authors
-        # Или передавать каждый параметр без authors
-        authors = validated_data["authors"]
-        validated_data.pop("authors")  # Удаляем авторов из словаря
-        instance = Entry(**validated_data)  # Создаём объект
-        instance.save()  # Сохраняем в БД
-        instance.authors.set(authors)  # Заполняем все в связи многое ко многому
-        return instance
-        """
-        Если бы не было связей много ко многому, то можно было бы записать так вместо всех строк
-        return Entry.objects.create(**validated_data)"""
-
-    def update(self, instance, validated_data):
-        for tag, value in validated_data.items():
-            if tag != 'authors':
-                setattr(instance, tag, value)
-            else:
-                instance.authors.set(value)  # Так как для отношения многое ко многому немного другая запись
-        """Или можно руками внести все поля где будут изменения (удобно, когда необходимо явно указать какие поля 
-        изменяются вне зависимости от параметров поля)
-        instance.headline = validated_data.get('headline', instance.headline)
-        instance.body_text = validated_data.get('body_text', instance.body_text)
-        instance.pub_date = validated_data.get('pub_date', instance.pub_date)
-        instance.mod_date = validated_data.get('mod_date', instance.mod_date)
-        instance.number_of_comments = validated_data.get('number_of_comments', instance.number_of_comments)
-        instance.number_of_pingbacks = validated_data.get('number_of_pingbacks', instance.number_of_pingbacks)
-        instance.rating = validated_data.get('rating', instance.rating)"""
-        instance.save()  # Сохранение изменений в БД
-        return instance
-
-data = {
-    'id': 1,
-    'blog': "1",
-    'headline': 'Hello World',
-    'body_text': 'This is my first blog post.',
-    'pub_date': '2023-07-19T12:00:00Z',
-    'authors': [1, 2, 3],
-}
-
-my_instance = Entry.objects.get(pk=data["id"])  # объявляем объект для редактирования
-serializer = EntrySerializer(instance=my_instance, data=data)  # Запись для обновления строки в БД. instance передаём
-# вместе с data, при сериализации id не будет участвовать (так как не определён в классовых атрибутах EntrySerializer),
-# он существует в data только для более удобного создания instance.
-
-# serializer = EntrySerializer(data=data)  # запись для создания объекта
-if serializer.is_valid():
-    print(repr(serializer.save()))  # <Entry: Hello World>
-```
-
-#### Немного про `read_only=True` и `write_only=True` для связанных полей
-
-Для связанных полей есть определенные комбинации как можно использовать поля
-
-Если используется `read_only=True`, то `queryset` не используется. Данная конструкция не позволит изменить связанные ключи
-и удобна для обновления(update()) данных БД, но при создании объекта(create()) произойдёт ошибка так как нужны ключи 
-создаваемых полей. Это можно поправить в APIView, ViewSet и т.д.
-
-```python
-from rest_framework import serializers
-from app.models import Entry
-from datetime import date
-
-class EntrySerializer(serializers.Serializer):
-    blog = serializers.PrimaryKeyRelatedField(read_only=True)
-    headline = serializers.CharField()
-    body_text = serializers.CharField()
-    pub_date = serializers.DateTimeField()
-    mod_date = serializers.DateField(default=date.today())
-    authors = serializers.PrimaryKeyRelatedField(read_only=True,
-                                                 many=True)
-    number_of_comments = serializers.IntegerField(default=0)
-    number_of_pingbacks = serializers.IntegerField(default=0)
-    rating = serializers.FloatField(default=0)
-
-    def create(self, validated_data):
-        instance = Entry(**validated_data)  # Создаём объект 
-        instance.save()  # Сохраняем в БД (получим ошибку, так как в validated_data нет blog,
-        # ввиду read_only=True) 
-        return instance
-
-    def update(self, instance, validated_data):
-        # При обновлении нет разницы, так как поля blog и authors не обновляются
-        for tag, value in validated_data.items():
-            setattr(instance, tag, value)
-        instance.save()  # Сохранение изменений в БД
-        return instance
-
-data = {
-    'id': 1,
-    'blog': "1",
-    'headline': 'Hello World',
-    'body_text': 'This is my first blog post.',
-    'pub_date': '2023-07-19T12:00:00Z',
-    'authors': [1, 2, 3],
-}
-
-# Обновление
-my_instance = Entry.objects.get(pk=data["id"])
-serializer = EntrySerializer(instance=my_instance, data=data)
-
-if serializer.is_valid():
-    print(repr(serializer.save()))  # <Entry: Hello World>
-
-# Создание
-serializer = EntrySerializer(data=data)  # запись для создания объекта
-if serializer.is_valid():
-    print(repr(serializer.save()))  # Получаем ошибку django.db.utils.IntegrityError: NOT NULL constraint failed: app_entry.blog_id
-```
-
-`write_only=True` обязывает использовать десериализацию входных полей. Удобно когда обязательно нужно изменять значения.
-Допустим 
-```python
-blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all(), write_only=True)
-```
-
-#### Работа с объекта Python не связанных с моделями БД
-
-При работе с Serializer можно работать не только с полями БД, но и собственными
-моделями(классами) не связанными с БД, если необходимо создать сериализатор для своих моделей.
-
-Допустим пусть есть модель комментарий.
-
-```python
-from datetime import datetime
-
-class Comment:
-    def __init__(self, email, content, created=None):
-        self.email = email
-        self.content = content
-        self.created = created or datetime.now()
-
-    def __str__(self):
-        return f"{self.email}, {self.content}, {self.created}"
-```
-Как видно это просто python класс никак не связанный с БД.
-
-Теперь создадим для него сериализатор, повторяющий поля нашего класса
-
-```python
-from rest_framework import serializers
-
-class CommentSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    content = serializers.CharField(max_length=200)
-    created = serializers.DateTimeField(default=datetime.now())
-
-    def create(self, validated_data):
-        return Comment(**validated_data)
-
-    def update(self, instance, validated_data):
-        instance.email = validated_data.get('email', instance.email)
-        instance.content = validated_data.get('content', instance.content)
-        instance.created = validated_data.get('created', instance.created)
-        return instance
-```
-
-Ранее при объявлении объекта сериализатора при инициализации передавали данные в параметр `data`.
-Теперь мы можем передать объект нашего класса прямо при инициализации(с объектом БД так не работает, так как объект должен
-быть итеррируемым)
-
-Тогда общий код будет следующим:
-
-```python
-from rest_framework import serializers
-from datetime import datetime
-
-class Comment:
-    def __init__(self, email, content, created=None):
-        self.email = email
-        self.content = content
-        self.created = created or datetime.now()
-
-    def __str__(self):
-        return f"{self.email}, {self.content}, {self.created}"
-
-
-class CommentSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    content = serializers.CharField(max_length=200)
-    created = serializers.DateTimeField(default=datetime.now())
-
-    def create(self, validated_data):
-        return Comment(**validated_data)
-
-    def update(self, instance, validated_data):
-        instance.email = validated_data.get('email', instance.email)
-        instance.content = validated_data.get('content', instance.content)
-        instance.created = validated_data.get('created', instance.created)
-        return instance
-
-comment = Comment(email='example@example.com', content='foo bar')
-
-serializer = CommentSerializer(comment)
-
-print(serializer.data)  # {'email': 'example@example.com', 'content': 'foo bar',
-# 'created': '2023-08-01T14:13:44.554445Z'}
-
-# Сериализация в json и десериализация аналогична примерам выше
-
-# Аналогично и использование параметра data при инициализации
-
-# Создание нового объекта
-serializer = CommentSerializer(data={'email': '123@123.com',
-                                     'content': '123'}
-                               )
-print(serializer.is_valid())  # True
-print(serializer.save())  # 123@123.com, 123, 2023-08-01 14:26:02.352685
-
-# Редактирование объекта
-print(comment)  # объект до редактирования example@example.com, foo bar, 2023-08-01 14:26:02.352685
-serializer = CommentSerializer(instance=comment,
-                               data={'email': '123@123.com',
-                                     'content': '123'}
-                               )
-
-print(serializer.is_valid())  # True
-print(serializer.save())  # 123@123.com, 123, 2023-08-01 14:26:02.352685
-print(comment)  # объект после редактирования 123@123.com, 123, 2023-08-01 14:26:02.352685
-```
-
-### 4. Способы валидации данных
-У Serializer есть встроенная валидация полей по типу поля, однако, если это необходимо, то можно дописать своих валидаторов
+### 3. Способы валидации данных
+У сериализатора есть встроенная валидация полей по типу поля, однако, если это необходимо, то можно дописать своих валидаторов
 
 Есть несколько подходов:
 
-#### 4.1 Валидация на уровне поля 
+#### 3.1 Валидация на уровне поля 
 
 Вы можете задать пользовательскую валидацию на уровне полей, добавив методы 
 validate_<field_name> в ваш подкласс Serializer.
@@ -702,7 +628,7 @@ print(serializer.errors)  # {}
 print(serializer.validated_data)  # OrderedDict([('content', '123')])
 ```
 
-#### 4.2 Передача валидатора полю через параметр поля validators
+#### 3.2 Передача валидатора полю через параметр поля validators
 
 Отдельные поля сериализатора могут включать валидаторы, 
 например, путем объявления их в экземпляре поля. Добавление валидаторов идёт через параметр `validators` который принимает
@@ -784,7 +710,7 @@ print(serializer.is_valid())  # False
 print(serializer.errors)  # {'headline': [ErrorDetail(string='This field must be unique.', code='unique')]}
 ```
 
-#### 4.3 Валидация на уровне объекта
+#### 3.3 Валидация на уровне объекта
 
 Чтобы выполнить любую другую проверку, требующую доступа к нескольким полям, добавьте 
 метод под названием `validate()` в ваш подкласс Serializer. Этот метод принимает единственный аргумент, который 
@@ -860,7 +786,7 @@ print(serializer.is_valid())  # False
 print(serializer.errors)  # {'content': [ErrorDetail(string='content is not digits', code='invalid')]}
 ```
 
-#### 4.4 Передача валидаторов через class Meta
+#### 3.4 Передача валидаторов через class Meta
 
 В Django Rest Framework (DRF) можно настроить валидаторы через `class Meta` 
 внутри сериализатора, используя атрибут `validators`.
@@ -1134,7 +1060,302 @@ print(serializer.errors)  # {'authors': [ErrorDetail(string='Число авто
 # 'rating': [ErrorDetail(string='This field must be unique for the "pub_date" year.', code='unique')]}
 ```
 
-### 5. Применение ModelSerializer
+### 4. Примеры использования сериализаторов
+
+Ниже рассмотрим пару примеров создания сериализаторов разными классами на примере 
+одной задачи, `создать сериализатор API, позволяющего получить все записи блогов`.
+
+### 5. Применение общего класса Serializer
+
+Ниже приведен пример для случая сериализации, без возможности создания или обновления
+объекта БД.
+
+```python
+from rest_framework import serializers
+from app.models import Blog, Author, Entry
+from datetime import date
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    # Для работы с поле много ко многому указываем many=True
+    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
+                                                 many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+# Можно передавать объекты БД
+serializer = EntrySerializer(Entry.objects.get(pk=3))
+print(serializer.data)  # {'blog': 1, 'headline': 'Знакомство с Парижем', 'body_text':
+# 'Париж - город любви, искусства и изысканности. \nЗнакомство с Парижем - это погружение в его узкие улочки,
+# исторические \nдостопримечательности и культурную сцену. Прогулка по набережной Сены, \nпосещение Эйфелевой башни,
+# музея Лувр и собора Парижской Богоматери - \nэто всего лишь некоторые из знаковых мест, которые стоит посетить.
+# \nПарижские кафе, булочные и рестораны предлагают богатство французской \nкухни и возможность насладиться неповторимой
+# атмосферой этого \nудивительного города.', 'pub_date': '2022-06-01T21:00:00Z', 'mod_date': '2023-07-17',
+# 'authors': [2, 4, 6], 'number_of_comments': 7, 'number_of_pingbacks': 5, 'rating': 4.7}
+
+"""Также можно передавать непосредственно данные, но механизм сериализатора устроен так, что если передаются данные,
+то их необходимо предварительно валидировать и затем произойдут дальнейшие необходимые запросы в БД
+Если данные не валидны, то атрибут validated_data будет пустым"""
+data = {
+    'blog': "1",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
+
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # True. Без вызова is_valid не получится получить validated_data или errors
+print(serializer.validated_data)  # OrderedDict([('blog', <Blog: Путешествия по миру>),
+# ('headline', 'Hello World'), ('body_text', 'This is my first blog post.'),
+# ('pub_date', datetime.datetime(2023, 7, 19, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC'))),
+# ('mod_date', datetime.date(2023, 7, 30)),
+# ('authors', [<Author: alexander89>, <Author: ekaterina_blog>, <Author: maxim_writer>]),
+# ('number_of_comments', 0), ('number_of_pingbacks', 0), ('rating', 0)])
+print(serializer.data)  # {'blog': 1, 'headline': 'Hello World',
+# 'body_text': 'This is my first blog post.', 'pub_date': '2023-07-19T12:00:00Z',
+# 'mod_date': '2023-07-30', 'authors': [1, 2, 3], 'number_of_comments': 0,
+# 'number_of_pingbacks': 0, 'rating': 0.0}
+
+"""В data ключ 'blog' c неверной валидацией, так как ожидается ссылка на отношение к ключу строки таблицы БД. Валидация
+проверяет существование ключа, поэтому ключ 0, -1, 100(так как его просто не существует записи в БД по такому ключу)
+не пройдут валидацию"""
+data = {
+    'blog': "rr",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
+
+serializer = EntrySerializer(data=data)
+print(serializer.is_valid())  # False
+print(serializer.errors)  # {'blog': [ErrorDetail(string='Incorrect type. 
+# Expected pk value, received str.', code='incorrect_type')]}
+print(serializer.validated_data)  # {}
+#  Так как валидация не прошла, то и данные с БД не были подтянуты при сериализации. Данные показывает, те, что были на входе
+print(serializer.data)  # {'blog': 'rr', 'headline': 'Hello World',
+# 'body_text': 'This is my first blog post.', 'pub_date': '2023-07-19T12:00:00Z',
+# 'authors': [1, 2, 3]}
+```
+
+Если необходимо иметь возможность создания или обновления объекта БД(или вашей модели) после валидации, 
+то необходимо переопределить методы `create(self, validated_data)` или 
+`update(self, instance, validated_data)` в которых необходимо описать какой объект 
+возвращается в случае создания и обновления.
+
+#### 5.1 Создание объекта в БД
+
+Если экземпляр сериализатора создан с использованием данных из запроса или 
+другого источника (например, `serializer = MySerializer(data=request.data)`), 
+и эти данные проходят валидацию (метод `is_valid()` возвращает `True`), 
+то DRF выполняет создание нового объекта в базе данных с использованием метода 
+`create()` сериализатора.
+
+```python
+from rest_framework import serializers
+from app.models import Entry, Blog, Author
+from datetime import date
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
+                                                 many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    def create(self, validated_data):
+        # Так как есть связь многое ко многому, то создание объекта будет немного специфичное
+        # Необходимо будет из данных как-то удалить authors и создать объект, а затем заполнить authors
+        # Или передавать каждый параметр без authors
+        authors = validated_data["authors"]
+        validated_data.pop("authors")  # Удаляем авторов из словаря
+        instance = Entry(**validated_data)  # Создаём объект
+        instance.save()  # Сохраняем в БД
+        instance.authors.set(authors)  # Заполняем все в связи многое ко многому
+        return instance
+        """
+        Если бы не было связей много ко многому, то можно было бы записать так вместо всех строк
+        return Entry.objects.create(**validated_data)"""
+
+data = {
+    'id': 1,
+    'blog': "1",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
+
+serializer = EntrySerializer(data=data)
+if serializer.is_valid():
+    print(repr(serializer.save()))  # <Entry: Hello World>
+    """То что мы указали в данных 'id': "1" не вызовет обновление данных, 
+    создастся новая строка в БД. 
+    Для обновления данных есть немного другая запись"""
+```
+
+То что мы указали в данных 'blog': "1" не вызовет обновление данных, создастся 
+новая строка в БД. Для обновления данных есть немного другая запись.
+
+#### 5.2 Обновление объекта в БД
+
+Если экземпляр сериализатора создан с существующим объектом из базы данных 
+(например, `serializer = MySerializer(instance=my_instance)`), и обновляемые данные 
+проходят валидацию, то DRF выполняет обновление существующего объекта в базе данных 
+с использованием метода `update()` сериализатора. 
+
+Именно наличие `instance` при инициализации сериализатора определяет что будет 
+обновление, а не создание нового объекта.
+
+Допустим объявим сразу и `create` и `update`, а решение будем принимать исходя 
+из наличия `id` блога в принимаемых данных.
+
+```python
+from rest_framework import serializers
+from app.models import Entry, Blog, Author
+from datetime import date
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(queryset=Author.objects.all(),
+                                                 many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    def create(self, validated_data):
+        # Так как есть связь многое ко многому, то создание объекта будет немного специфичное
+        # Необходимо будет из данных как-то удалить authors и создать объект, а затем заполнить authors
+        # Или передавать каждый параметр без authors
+        authors = validated_data["authors"]
+        validated_data.pop("authors")  # Удаляем авторов из словаря
+        instance = Entry(**validated_data)  # Создаём объект
+        instance.save()  # Сохраняем в БД
+        instance.authors.set(authors)  # Заполняем все в связи многое ко многому
+        return instance
+        """
+        Если бы не было связей много ко многому, то можно было бы записать так вместо всех строк
+        return Entry.objects.create(**validated_data)"""
+
+    def update(self, instance, validated_data):
+        for tag, value in validated_data.items():
+            if tag != 'authors':
+                setattr(instance, tag, value)
+            else:
+                instance.authors.set(value)  # Так как для отношения многое ко многому немного другая запись
+        """Или можно руками внести все поля где будут изменения (удобно, когда необходимо явно указать какие поля 
+        изменяются вне зависимости от параметров поля)
+        instance.headline = validated_data.get('headline', instance.headline)
+        instance.body_text = validated_data.get('body_text', instance.body_text)
+        instance.pub_date = validated_data.get('pub_date', instance.pub_date)
+        instance.mod_date = validated_data.get('mod_date', instance.mod_date)
+        instance.number_of_comments = validated_data.get('number_of_comments', instance.number_of_comments)
+        instance.number_of_pingbacks = validated_data.get('number_of_pingbacks', instance.number_of_pingbacks)
+        instance.rating = validated_data.get('rating', instance.rating)"""
+        instance.save()  # Сохранение изменений в БД
+        return instance
+
+data = {
+    'id': 1,
+    'blog': "1",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
+
+my_instance = Entry.objects.get(pk=data["id"])  # объявляем объект для редактирования
+serializer = EntrySerializer(instance=my_instance, data=data)  # Запись для обновления строки в БД. instance передаём
+# вместе с data, при сериализации id не будет участвовать (так как не определён в классовых атрибутах EntrySerializer),
+# он существует в data только для более удобного создания instance.
+
+# serializer = EntrySerializer(data=data)  # запись для создания объекта
+if serializer.is_valid():
+    print(repr(serializer.save()))  # <Entry: Hello World>
+```
+
+#### 5.3 Немного про `read_only=True` и `write_only=True` для связанных полей
+
+Для связанных полей есть определенные комбинации как можно использовать поля
+
+Если используется `read_only=True`, то `queryset` не используется. Данная конструкция не позволит изменить связанные ключи
+и удобна для обновления(update()) данных БД, но при создании объекта(create()) произойдёт ошибка так как нужны ключи 
+создаваемых полей. Это можно поправить в APIView, ViewSet и т.д.
+
+```python
+from rest_framework import serializers
+from app.models import Entry
+from datetime import date
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(read_only=True)
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(read_only=True,
+                                                 many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    def create(self, validated_data):
+        instance = Entry(**validated_data)  # Создаём объект 
+        instance.save()  # Сохраняем в БД (получим ошибку, так как в validated_data нет blog,
+        # ввиду read_only=True) 
+        return instance
+
+    def update(self, instance, validated_data):
+        # При обновлении нет разницы, так как поля blog и authors не обновляются
+        for tag, value in validated_data.items():
+            setattr(instance, tag, value)
+        instance.save()  # Сохранение изменений в БД
+        return instance
+
+data = {
+    'id': 1,
+    'blog': "1",
+    'headline': 'Hello World',
+    'body_text': 'This is my first blog post.',
+    'pub_date': '2023-07-19T12:00:00Z',
+    'authors': [1, 2, 3],
+}
+
+# Обновление
+my_instance = Entry.objects.get(pk=data["id"])
+serializer = EntrySerializer(instance=my_instance, data=data)
+
+if serializer.is_valid():
+    print(repr(serializer.save()))  # <Entry: Hello World>
+
+# Создание
+serializer = EntrySerializer(data=data)  # запись для создания объекта
+if serializer.is_valid():
+    print(repr(serializer.save()))  # Получаем ошибку django.db.utils.IntegrityError: NOT NULL constraint failed: app_entry.blog_id
+```
+
+`write_only=True` обязывает использовать десериализацию входных полей. Удобно когда обязательно нужно изменять значения.
+Допустим 
+```python
+blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all(), write_only=True)
+```
+
+### 6. Применение класса ModelSerializer
 
 `ModelSerializer` - это обычный `Serializer`, за исключением того, что:
 
@@ -1259,7 +1480,7 @@ print(serializer.is_valid())  # False
 print(serializer.errors)  # {'rating': [ErrorDetail(string='This field must be unique for the "pub_date" year.', code='unique')]}
 ```
 
-### 6. Применение HyperlinkedModelSerializer
+### 7. Применение класса HyperlinkedModelSerializer
 
 Тип `ModelSerializer`, который вместо этого использует гиперссылки.
 первичных ключевых отношений. 
@@ -1588,7 +1809,7 @@ print(serializer.is_valid())  # True
 print(serializer.data)
 ```
 
-### 7. Настройка класса Meta у Serializer, ModelSerializer и HyperlinkedModelSerializer
+### 8. Настройка класса Meta у Serializer, ModelSerializer и HyperlinkedModelSerializer
 
 В классе Meta у сериализатора можно определить различные параметры для управления его поведением. 
 Вот некоторые из наиболее распространенных параметров и их описание:
@@ -1834,7 +2055,7 @@ pprint.pprint(json.dumps(serializer.data, ensure_ascii=False, indent=4))
 более эффективным решением может быть использование `serializers.Serializer` и определение кастомной логики для 
 обработки связанных объектов.
 
-#### 7.1 Устаревшие параметры
+#### 8.1 Устаревшие параметры
 Далее будут рассмотрены устаревшие параметры(после версии 3.9.0 Django REST framework, после ноября 2018 года), 
 но которые могут встретиться при исследовании кода.
 

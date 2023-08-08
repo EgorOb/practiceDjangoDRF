@@ -10,35 +10,18 @@ if __name__ == "__main__":
     # Проверьте куски кода здесь
 
     from rest_framework import serializers
-    from app.models import Entry
+    from app.models import Entry, Blog
 
+    # поле blog через PrimaryKeyRelatedField
+    class EntrySerializer(serializers.Serializer):
+        blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
 
-    class EntryHyperlinkedModelSerializer(serializers.HyperlinkedModelSerializer):
-        class Meta:
-            model = Entry
-            fields = '__all__'
+    serializer = EntrySerializer(Entry.objects.get(id=4))
+    print(serializer.data)  # {'blog': 1}
 
-    data = {
-        'blog': 'http://example.com/blogs/1/',  # Гиперссылка на блог с id=1
-        'headline': 'Hello',
-        'body_text': 'World',
-        'pub_date': '2023-07-19T12:00:00Z',
-        'authors': ['http://example.com/authors/1/', 'http://example.com/authors/2/'],
-        # Гиперссылки на авторов с id=1 и id=2
-        'number_of_comments': 2,
-        'rating': 0.0,
-    }
+    # поле blog через StringRelatedField
+    class EntrySerializer(serializers.Serializer):
+        blog = serializers.StringRelatedField()
 
-    from django.test import RequestFactory
-
-    # Создаем экземпляр RequestFactory
-    factory = RequestFactory()
-
-    # Создаем фейковый GET-запрос
-    request = factory.get('/my-api-url/')  # Нужен путь на реальный обработчик DRF обрабатывающий данный сериализатор
-
-    serializer = EntryHyperlinkedModelSerializer(data=data, context={'request': request})
-    print(serializer.is_valid())  # True
-
-    # Получение данных для сериализации
-    print(serializer.data)
+    serializer = EntrySerializer(Entry.objects.get(id=4))
+    print(serializer.data)  # {'blog': 'Путешествия по миру'}
