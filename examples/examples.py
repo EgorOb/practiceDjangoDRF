@@ -75,8 +75,10 @@ if __name__ == "__main__":
         "password": "123"
     }
 
-    from rest_framework_simplejwt.views import TokenObtainPairView, TokenBlacklistView
+    from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
     from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, OutstandingToken, BlacklistedToken
+
+    OutstandingToken.objects.all().delete()  # Очистка БД от передыдущих токенов в системе
     # Обработчик JWT для получения токена
     token_view = TokenObtainPairView.as_view()
     # Передаём запрос на получение токена для пользователя
@@ -85,61 +87,76 @@ if __name__ == "__main__":
     # Как только отработал обработчик создания токена, то в таблице Outstanding tokens БД создался действующий токен
     token_data = response.data
     # Токен доступа
-    access_token1 = token_data.get("access")
-    refresh_token1 = token_data.get("refresh")
+    access_token = token_data.get("access")
+    refresh_token = token_data.get("refresh")
 
-    # Работать с действующими токенами можно так(как с объектом модели)
-    print(OutstandingToken.objects.all())  # <QuerySet [
-    # <OutstandingToken: Token for admin (64363557b94b4253bbd95f029df03e01)>
-    # ]>
+    data_token_refresh = RefreshToken(refresh_token)  # декодируем токен и получаем информацию
+    data_token_access = AccessToken(access_token)
 
-    # В действующем токене хранится информация только о токене обновления. Библиотека подразумевает, что токен доступа
-    # сохранит или пользователь или приложение пользователя. Вспомните как GitHub выдаёт свои токены для подключения IDE
+    # Узнать время создания 'iat' и время окончания 'exp'
+    # Получение времени жизни для токена обновления в секундах
+    print(data_token_refresh['exp'] - data_token_refresh['iat'])  # 30
+    # Получение времени жизни для доступа обновления в секундах
+    print(data_token_access['exp'] - data_token_access['iat'])  # 10
+    # Или можно узнать по атрибуту
+    print(data_token_refresh.lifetime, data_token_access.lifetime)  # 0:00:30 0:00:10
 
-    # Проверка, что в объекте БД хранится токен обновления
-    print(refresh_token1 == OutstandingToken.objects.first().token)  # True
+    import time
+    # Получение данных до истечения срока жизни токена доступа
+    view = MyView.as_view()
 
-    # Создадим ещё пару токенов, чтобы потом добавить их в черный список разными способами
-    request = factory.post('/token/', user_data, format='json')
-    access_token2 = token_view(request).data.get("access")
+    # Создаем запрос и установливаем заголовок Authorization
+    request = factory.get('/my-view/')
+    request.META['HTTP_AUTHORIZATION'] = f"Bearer {access_token}"
 
-    request = factory.post('/token/', user_data, format='json')
-    access_token3 = token_view(request).data.get("access")
+    # Отправляем запрос с заголовком Authorization
+    response = view(request)
+    # Проверяем результат
+    print(response.status_code)  # 200
 
-    print(OutstandingToken.objects.all())  # <QuerySet [
-    # <OutstandingToken: Token for admin (64363557b94b4253bbd95f029df03e01)>,
-    # <OutstandingToken: Token for admin (123ebcc07c1e40f6968d005f181ec908)>,
-    # <OutstandingToken: Token for admin (ad249807841b4112a2c49ff7ca016116)>
-    # ]>
+    # Ожидание некоторого времени для истечения срока
+    time.sleep(10)
+    # Новый запрос доступа
+    request = factory.get('/my-view/')
+    request.META['HTTP_AUTHORIZATION'] = f"Bearer {access_token}"
 
-    # access_token1, 2, 3 были сохранены специально, чтобы можно было проверить доступ к API, так как писалось ранее
-    # через токен обновления можно только получить новый токен, а не узнать текущий.
+    # Отправляем запрос с заголовком Authorization
+    response = view(request)
+    # Проверяем результат
+    print(response.status_code)  # 401
+    print(response.data)  # {'detail': ErrorDetail(string='Given token not valid for any token type', code='token_not_valid'),
+    # 'code': ErrorDetail(string='token_not_valid', code='token_not_valid'),
+    # 'messages': [{'token_class': ErrorDetail(string='AccessToken', code='token_not_valid'),
+    # 'token_type': ErrorDetail(string='access', code='token_not_valid'),
+    # 'message': ErrorDetail(string='Token is invalid or expired', code='token_not_valid')}]}
 
-    # 1. Использование класса представления TokenBlacklistView
-    token_blacklist_view = TokenBlacklistView.as_view()
-    # Просто отправляем запрос с доступом и токен попадёт в черный список автоматически
-    request = factory.post('/blacklist/', {'token': access_token1, 'refresh': refresh_token1}, format='json')
+    # Получаем новый токен за счёт обновления токена доступа
+    request = factory.post('/token/refresh/', {"refresh": refresh_token}, format='json')
+    refresh_view = TokenRefreshView.as_view()
+    response = refresh_view(request)
+    token_data = response.data
 
-    # Запомним jti (JSON Token ID) чтобы потом проверить, что токен есть в базе данных черного списка. Делается это
-    # заранее, так как если вызвать после блокировки, то вызовется исключение, что токен заблокирован
-    data_token = RefreshToken(refresh_token1)  # декодируем токен и получаем информацию
-    print(data_token)  # {'token_type': 'refresh', 'exp': 1693401757, 'iat': 1693315357,
-    # 'jti': 'f3d227af785d426b8c2b506700269693', 'user_id': 1}
+    # Новый токен доступа и токен обновления(так как стоит установка обновлять токен доступа после каждого запроса обновления)
+    access_token_new = token_data.get("access")
+    refresh_token_new = token_data.get("refresh")
+    print(access_token_new == access_token, refresh_token_new == refresh_token)  # False False
 
-    # Отработаем представление
-    response = token_blacklist_view(request)
+    # Так как токен обновления обновлен и стоит условие, что он попадает в черный список, значит от не действителен и не
+    # позволит заново обновить по прошлому токену обновления
+    request = factory.post('/token/refresh/', {"refresh": refresh_token}, format='json')
+    refresh_view = TokenRefreshView.as_view()
+    response = refresh_view(request)
+    print(response.data)  # {'detail': ErrorDetail(string='Token is blacklisted', code='token_not_valid'),
+    # 'code': ErrorDetail(string='token_not_valid', code='token_not_valid')}
 
-    # Проверка, что токен теперь в БД черного списка
+    # Так же в БД можно посмотреть, что добавились токены в черный список(прошлый действующий токен refresh_token)
+    print(BlacklistedToken.objects.all())  # <QuerySet [<BlacklistedToken: Blacklisted token for admin>]>
 
-    print(BlacklistedToken.objects.first().token.jti == data_token['jti'])
-
-
-
-
-
-
-
-    #
-    # OutstandingToken.objects.all().delete()
-
-
+    # Если ещё подождать пока истечет срок действия токена обновления, то уже придётся делать новый запрос
+    # на токен(TokenObtainPairView)
+    time.sleep(15)
+    request = factory.post('/token/refresh/', {"refresh": refresh_token_new}, format='json')
+    refresh_view = TokenRefreshView.as_view()
+    response = refresh_view(request)
+    print(response.data)  # {'detail': ErrorDetail(string='Token is invalid or expired', code='token_not_valid'),
+    # 'code': ErrorDetail(string='token_not_valid', code='token_not_valid')}

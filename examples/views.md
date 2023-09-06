@@ -1540,7 +1540,9 @@ print(response.status_code)  # 200
 # Django project settings.py
 
 from datetime import timedelta
-...
+
+# В timedelta можно передать следующие параметры: days, seconds, microseconds, milliseconds, minutes, hours, weeks
+
 # В значениях приведены параметры используемые по умолчанию
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
@@ -1587,7 +1589,7 @@ SIMPLE_JWT = {
 времени токен доступа будет действителен. Например, timedelta(minutes=60) означает, что токен будет действителен 
 в течение 1 часа.
 
-По умолчанию равен времени сессии в Django, равной 2 недели (1209600 секунд).
+По умолчанию срок равен 5 минутам.
 
 * `REFRESH_TOKEN_LIFETIME`: Определяет срок действия токенов обновления (refresh tokens). Токен обновления позволяет 
 пользователю обновить свой токен доступа (access token) после истечения его срока действия без необходимости повторной 
@@ -1595,7 +1597,7 @@ SIMPLE_JWT = {
 значение timedelta(days=30), то токен обновления будет действителен в течение 30 дней, после чего пользователю потребуется
 повторная аутентификация.
 
-По умолчанию явно не указан срок.
+По умолчанию срок равен 1 день.
 
 * `ROTATE_REFRESH_TOKENS`: Если установлен в True, токен обновления будет обновлен при каждом его использовании для 
 продления токена доступа. Это может повысить безопасность вашей системы.
@@ -1722,18 +1724,226 @@ CHECK_REVOKE_TOKEN равно True, это поле будет включено 
 
 Эти параметры позволяют настроить поведение и безопасность JWT-токенов в вашем приложении согласно вашим требованиям. Вам следует тщательно оценить параметры в SIMPLE_JWT, чтобы обеспечить безопасность и срок действия токенов, соответствующие вашим потребностям.
 
-Допустим если рассмотреть такой пример:
+Допустим если рассмотреть такой пример (Сделаем время жизни токена доступа 10 секунд, а время жизни токена обновления 
+15 секунд, также при использовании токена обновления выдаётся новый, а старый помещается в черный список(будет рассмотрено 
+далее)):
 
 ```python
-
+# Django project settings.py
+from datetime import timedelta
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(seconds=10),
+    "REFRESH_TOKEN_LIFETIME": timedelta(seconds=15),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+}
 ```
 
-###### Добавление токенов в "черный список"
+```python
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory
+from rest_framework import status  # Импортируем статусы HTTP
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from rest_framework import serializers
+from app.models import Entry, Blog, Author
+from datetime import date
+
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(
+        queryset=Author.objects.all(),
+        many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    def create(self, validated_data):
+        # Так как есть связь многое ко многому, то создание объекта будет немного специфичное
+        # Необходимо будет из данных как-то удалить authors и создать объект, а затем заполнить authors
+        # Или передавать каждый параметр без authors
+        authors = validated_data["authors"]
+        validated_data.pop("authors")  # Удаляем авторов из словаря
+        instance = Entry(**validated_data)  # Создаём объект
+        instance.save()  # Сохраняем в БД
+        instance.authors.set(authors)  # Заполняем все в связи многое ко многому
+        return instance
+
+    def update(self, instance, validated_data):
+        for tag, value in validated_data.items():
+            if tag != 'authors':
+                setattr(instance, tag, value)
+            else:
+                instance.authors.set(value)  # Так как для отношения многое ко многому немного другая запись
+        instance.save()  # Сохранение изменений в БД
+        return instance
+
+
+class MyView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        queryset = Entry.objects.all()  # Получаем все объекты модели
+        serializer = EntrySerializer(queryset,
+                                     many=True)  # Множество объектов для сериализации
+
+        return Response(serializer.data)
+
+
+# Создаем объект RequestFactory
+factory = APIRequestFactory()
+
+user_data = {
+    "username": "admin",
+    "password": "123"
+}
+
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, OutstandingToken, BlacklistedToken
+
+OutstandingToken.objects.all().delete()  # Очистка БД от передыдущих токенов в системе
+# Обработчик JWT для получения токена
+token_view = TokenObtainPairView.as_view()
+# Передаём запрос на получение токена для пользователя
+request = factory.post('/token/', user_data, format='json')
+response = token_view(request)
+# Как только отработал обработчик создания токена, то в таблице Outstanding tokens БД создался действующий токен
+token_data = response.data
+# Токен доступа
+access_token = token_data.get("access")
+refresh_token = token_data.get("refresh")
+
+data_token_refresh = RefreshToken(refresh_token)  # декодируем токен и получаем информацию
+data_token_access = AccessToken(access_token)
+
+# Узнать время создания 'iat' и время окончания 'exp'
+# Получение времени жизни для токена обновления в секундах
+print(data_token_refresh['exp'] - data_token_refresh['iat'])  # 30
+# Получение времени жизни для доступа обновления в секундах
+print(data_token_access['exp'] - data_token_access['iat'])  # 10
+# Или можно узнать по атрибуту
+print(data_token_refresh.lifetime, data_token_access.lifetime)  # 0:00:30 0:00:10
+
+import time
+# Получение данных до истечения срока жизни токена доступа
+view = MyView.as_view()
+
+# Создаем запрос и установливаем заголовок Authorization
+request = factory.get('/my-view/')
+request.META['HTTP_AUTHORIZATION'] = f"Bearer {access_token}"
+
+# Отправляем запрос с заголовком Authorization
+response = view(request)
+# Проверяем результат
+print(response.status_code)  # 200
+
+# Ожидание некоторого времени для истечения срока
+time.sleep(10)
+# Новый запрос доступа
+request = factory.get('/my-view/')
+request.META['HTTP_AUTHORIZATION'] = f"Bearer {access_token}"
+
+# Отправляем запрос с заголовком Authorization
+response = view(request)
+# Проверяем результат
+print(response.status_code)  # 401
+print(response.data)  # {'detail': ErrorDetail(string='Given token not valid for any token type', code='token_not_valid'),
+# 'code': ErrorDetail(string='token_not_valid', code='token_not_valid'),
+# 'messages': [{'token_class': ErrorDetail(string='AccessToken', code='token_not_valid'),
+# 'token_type': ErrorDetail(string='access', code='token_not_valid'),
+# 'message': ErrorDetail(string='Token is invalid or expired', code='token_not_valid')}]}
+
+# Получаем новый токен за счёт обновления токена доступа
+request = factory.post('/token/refresh/', {"refresh": refresh_token}, format='json')
+refresh_view = TokenRefreshView.as_view()
+response = refresh_view(request)
+token_data = response.data
+
+# Новый токен доступа и токен обновления(так как стоит установка обновлять токен доступа после каждого запроса обновления)
+access_token_new = token_data.get("access")
+refresh_token_new = token_data.get("refresh")
+print(access_token_new == access_token, refresh_token_new == refresh_token)  # False False
+
+# Так как токен обновления обновлен и стоит условие, что он попадает в черный список, значит от не действителен и не
+# позволит заново обновить по прошлому токену обновления
+request = factory.post('/token/refresh/', {"refresh": refresh_token}, format='json')
+refresh_view = TokenRefreshView.as_view()
+response = refresh_view(request)
+print(response.data)  # {'detail': ErrorDetail(string='Token is blacklisted', code='token_not_valid'),
+# 'code': ErrorDetail(string='token_not_valid', code='token_not_valid')}
+
+# Так же в БД можно посмотреть, что добавились токены в черный список(прошлый действующий токен refresh_token)
+print(BlacklistedToken.objects.all())  # <QuerySet [<BlacklistedToken: Blacklisted token for admin>]>
+
+# Если ещё подождать пока истечет срок действия токена обновления, то уже придётся делать новый запрос
+# на токен(TokenObtainPairView)
+time.sleep(15)
+request = factory.post('/token/refresh/', {"refresh": refresh_token_new}, format='json')
+refresh_view = TokenRefreshView.as_view()
+response = refresh_view(request)
+print(response.data)  # {'detail': ErrorDetail(string='Token is invalid or expired', code='token_not_valid'),
+# 'code': ErrorDetail(string='token_not_valid', code='token_not_valid')}
+```
+
+###### Работа с "черным списком" токенов
 
 [Документация](https://django-rest-framework-simplejwt.readthedocs.io/en/latest/blacklist_app.html)
 Если есть необходимость целенаправленного заблокирования обслуживания токенов(даже если они работоспособны), то Simple JWT 
-включает в себя приложение, предоставляющее функции черного списка токенов. 
-Чтобы использовать это приложение, включите его в список установленных приложений в settings.py
+включает в себя приложение, предоставляющее функции черного списка токенов. Блокировка идёт по токену обновления.
+
+Токен доступа (access token) и токен обновления (refresh token) - это два разных типа токенов, каждый из которых имеет 
+свою функцию в системе аутентификации и авторизации.
+
+Токен доступа (Access Token):
+
+* Используется для получения доступа к защищенным ресурсам (например, API-эндпоинтам) от имени пользователя.
+* Обычно имеет короткий срок действия (например, несколько минут или часов) для обеспечения безопасности.
+* Необходимо часто запрашивать новый токен доступа после истечения его срока действия.
+* В случае утери или компрометации токена доступа, злоумышленник может получить доступ только в течение оставшегося срока действия токена.
+
+Токен обновления (Refresh Token):
+
+* Используется для получения нового токена доступа после истечения срока действия предыдущего токена доступа.
+* Обычно имеет более долгий срок действия (например, несколько дней или месяцев).
+* Пользователь может использовать токен обновления, чтобы автоматически получить новый токен доступа без повторной аутентификации.
+* Токен обновления является мощным инструментом, и его безопасность должна быть очень внимательно управляема.
+
+Блокировка токенов обновления (refresh tokens) часто используется для более гибкого управления безопасностью и сессиями 
+пользователей. Вот несколько причин, почему блокируются именно токены обновления, а не токены доступа:
+
+* `Длительность сессии`: Токены обновления имеют более долгий срок действия по сравнению с токенами доступа. 
+Это позволяет пользователям оставаться залогиненными на длительное время, даже если токен доступа истек. Блокируя токен 
+обновления, вы можете управлять длительностью сессии пользователя.
+
+* `Большая безопасность`: Токены обновления обычно хранятся в безопасном месте на стороне клиента (например, в куки или 
+хранилище сессий) и имеют ограниченное время жизни. Это делает их менее подверженными атакам, связанным с утечкой токенов, 
+чем токены доступа, которые часто передаются в заголовках запросов.
+
+* `Управление сессиями`: Блокировка токенов обновления позволяет администраторам и администраторам безопасности управлять 
+активными сессиями пользователей. Если, например, пользователь заблокирован или выходит из системы, администратор может 
+немедленно прекратить действие его сессии, добавив токен обновления в черный список.
+
+* `Повышение безопасности`: Если токен доступа утек или был скомпрометирован, администратор может заблокировать все сессии 
+пользователя, удалив все его токены обновления из черного списка. Это увеличивает безопасность при нарушении безопасности.
+
+* `Ограниченное использование`: Токены обновления могут быть настроены на одноразовое использование. То есть после 
+использования токена обновления для получения нового токена доступа, он больше не может быть использован повторно. 
+Это дополнительный уровень безопасности.
+
+Общий подход заключается в том, что токены обновления более долгосрочны и управляемы администратором, в то время как 
+токены доступа более короткосрочны и используются для конкретных операций. Таким образом, блокировка токенов обновления 
+позволяет управлять активными сессиями и повышать безопасность приложения.
+
+
+Чтобы использовать приложение "черного списка", то включите его в список установленных приложений в settings.py
 
 ```python
 INSTALLED_APPS = (
@@ -1786,7 +1996,6 @@ except OutstandingToken.DoesNotExist:
     # Обработайте случай, если токен не найден
     pass
 ```
-
 
 Также можно работать через представление `TokenBlacklistView`
 
@@ -1849,44 +2058,238 @@ print(decoded_refresh_token)
 ```
 
 
-
-
 Ниже приведён пример работы с черным списком:
 
 ```python
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory
+from rest_framework import status  # Импортируем статусы HTTP
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from rest_framework import serializers
+from app.models import Entry, Blog, Author
+from datetime import date
+
+
+class EntrySerializer(serializers.Serializer):
+    blog = serializers.PrimaryKeyRelatedField(queryset=Blog.objects.all())
+    headline = serializers.CharField()
+    body_text = serializers.CharField()
+    pub_date = serializers.DateTimeField()
+    mod_date = serializers.DateField(default=date.today())
+    authors = serializers.PrimaryKeyRelatedField(
+        queryset=Author.objects.all(),
+        many=True)
+    number_of_comments = serializers.IntegerField(default=0)
+    number_of_pingbacks = serializers.IntegerField(default=0)
+    rating = serializers.FloatField(default=0)
+
+    def create(self, validated_data):
+        # Так как есть связь многое ко многому, то создание объекта будет немного специфичное
+        # Необходимо будет из данных как-то удалить authors и создать объект, а затем заполнить authors
+        # Или передавать каждый параметр без authors
+        authors = validated_data["authors"]
+        validated_data.pop("authors")  # Удаляем авторов из словаря
+        instance = Entry(**validated_data)  # Создаём объект
+        instance.save()  # Сохраняем в БД
+        instance.authors.set(authors)  # Заполняем все в связи многое ко многому
+        return instance
+
+    def update(self, instance, validated_data):
+        for tag, value in validated_data.items():
+            if tag != 'authors':
+                setattr(instance, tag, value)
+            else:
+                instance.authors.set(value)  # Так как для отношения многое ко многому немного другая запись
+        instance.save()  # Сохранение изменений в БД
+        return instance
+
+
+class MyView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request):
+        queryset = Entry.objects.all()  # Получаем все объекты модели
+        serializer = EntrySerializer(queryset,
+                                     many=True)  # Множество объектов для сериализации
+
+        return Response(serializer.data)
+
+
+# Создаем объект RequestFactory
+factory = APIRequestFactory()
+
+user_data = {
+    "username": "admin",
+    "password": "123"
+}
+
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenBlacklistView, TokenRefreshView
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, OutstandingToken, BlacklistedToken
+
+OutstandingToken.objects.all().delete()  # Очистка БД от передыдущих токенов в системе
+
+# Обработчик JWT для получения токена
+token_view = TokenObtainPairView.as_view()
+# Передаём запрос на получение токена для пользователя
+request = factory.post('/token/', user_data, format='json')
+response = token_view(request)
+# Как только отработал обработчик создания токена, то в таблице Outstanding tokens БД создался действующий токен
+token_data = response.data
+# Токен доступа
+access_token1 = token_data.get("access")
+refresh_token1 = token_data.get("refresh")
+
+# Работать с действующими токенами можно так(как с объектом модели)
+print(OutstandingToken.objects.all())  # <QuerySet [
+# <OutstandingToken: Token for admin (64363557b94b4253bbd95f029df03e01)>
+# ]>
+
+# В действующем токене хранится информация только о токене обновления. Библиотека подразумевает, что токен доступа
+# сохранит или пользователь или приложение пользователя. Вспомните как GitHub выдаёт свои токены для подключения IDE
+
+# Проверка, что в объекте БД хранится токен обновления
+print(refresh_token1 == OutstandingToken.objects.first().token)  # True
+
+# Создадим ещё пару токенов, чтобы потом добавить их в черный список разными способами
+request = factory.post('/token/', user_data, format='json')
+token_data = token_view(request).data
+access_token2 = token_data.get("access")
+refresh_token2 = token_data.get("refresh")
+
+request = factory.post('/token/', user_data, format='json')
+token_data = token_view(request).data
+access_token3 = token_data.get("access")
+refresh_token3 = token_data.get("refresh")
+
+print(OutstandingToken.objects.all())  # <QuerySet [
+# <OutstandingToken: Token for admin (64363557b94b4253bbd95f029df03e01)>,
+# <OutstandingToken: Token for admin (123ebcc07c1e40f6968d005f181ec908)>,
+# <OutstandingToken: Token for admin (ad249807841b4112a2c49ff7ca016116)>,
+# <OutstandingToken: Token for admin (4729d7yrdhr84jr84hdftd784hroeyh3)>
+# ]>
+
+# access_token1, 2, 3 были сохранены специально, чтобы можно было проверить доступ к API, так как писалось ранее
+# через токен обновления можно только получить новый токен, а не узнать текущий.
+
+"""1. Использование класса представления TokenBlacklistView"""
+
+token_blacklist_view = TokenBlacklistView.as_view()
+# Просто отправляем запрос с токеном обновления и токен попадёт в черный список автоматически
+request = factory.post('/blacklist/', {'refresh': refresh_token1}, format='json')
+
+# Запомним jti (JSON Token ID) чтобы потом проверить, что токен есть в базе данных черного списка. Делается это
+# заранее, так как если вызвать после блокировки, то вызовется исключение, что токен заблокирован
+data_token_refresh = RefreshToken(refresh_token1)  # декодируем токен и получаем информацию
+print(data_token_refresh)  # {'token_type': 'refresh', 'exp': 1693401757, 'iat': 1693315357,
+# 'jti': 'f3d227af785d426b8c2b506700269693', 'user_id': 1}
+
+# Узнать время создания 'iat' и время окончания 'exp' можно через datetime.datetime.fromtimestamp()
+from datetime import datetime
+# Получение времени создания и окончания действия для токена обновления (по умолчанию разница будет 1 день)
+print(datetime.fromtimestamp(data_token_refresh['iat']))
+print(datetime.fromtimestamp(data_token_refresh['exp']))
+# Получение времени создания и окончания действия для токена доступа (по умолчанию разница будет 5 минут)
+data_token_access = AccessToken(access_token1)
+print(datetime.fromtimestamp(data_token_access['iat']))
+print(datetime.fromtimestamp(data_token_access['exp']))
+
+# Отработаем представление
+response = token_blacklist_view(request)
+
+# Проверка, что токен теперь в БД черного списка
+print(BlacklistedToken.objects.first().token.jti == data_token_refresh['jti'])
+
+# Проверка, что по токену нельзя обновить ключ (refresh_token1) доступ заблокирован.
+refresh_view = TokenRefreshView.as_view()
+
+# Создаем запрос
+request = factory.post('/my-view/', {"refresh": refresh_token1})
+
+# Отправляем запрос
+response = refresh_view(request)
+# Проверяем результат
+print(response.status_code)  # 401
+print(response.data)  # {'detail': ErrorDetail(string='Token is blacklisted', code='token_not_valid'),
+# 'code': ErrorDetail(string='token_not_valid', code='token_not_valid')}
+
+# Но при этом по токену доступа(access_token1) получить доступ можно будет до тех пор пока этот токен не истечёт.
+view = MyView.as_view()
+# Создаем запрос и установливаем заголовок Authorization
+request = factory.get('/my-view/')
+request.META['HTTP_AUTHORIZATION'] = f"Bearer {access_token1}"
+
+response = view(request)
+# Проверяем результат
+print(response.status_code)  # 200
+print(response.data)  # Выводит все записи
+
+"""2. Работа через объект RefreshToken"""
+token = RefreshToken(refresh_token2)
+token.blacklist()
+# Проверка существования в БД
+print(BlacklistedToken.objects.filter(token__jti=token['jti']))  # <QuerySet [<BlacklistedToken: Blacklisted token for admin>]>
+
+"""3. Непосредственная работа через БД"""
+# Получение действующего токена (создаётся автоматически в OutstandingToken, при создании токена через TokenObtainPairView)
+outstanding_token = OutstandingToken.objects.get(token=refresh_token3)
+# Токен можно получить и через jti(если он известен)
+jti = RefreshToken(refresh_token3)['jti']  # или jti можно получить из токена декодировав его
+outstanding_token = OutstandingToken.objects.get(jti=jti)  # Результат будет аналогичен outstanding_token выше
+# Отзовите токен, добавив его в черный список
+BlacklistedToken.objects.create(token=outstanding_token)
+print(BlacklistedToken.objects.all())  # <QuerySet [<BlacklistedToken: Blacklisted token for admin>,
+# <BlacklistedToken: Blacklisted token for admin>, <BlacklistedToken: Blacklisted token for admin>]>
+
+"""Удаление токена из черного списка"""
+# Удаляем запись из черного списка по токену
+BlacklistedToken.objects.filter(token__token=refresh_token2).delete()
+# Удаляем запись из черного списка по jti
+BlacklistedToken.objects.filter(token__jti=jti).delete()
+print(BlacklistedToken.objects.all())  # <QuerySet [<BlacklistedToken: Blacklisted token for admin>]>
+
+# Удалили из черного списка refresh_token2 и refresh_token3
+# Проверим, что после удаления доступ к обновлению токена вернулся на примере refresh_token2
+request = factory.post('/token/refresh/', {"refresh": refresh_token2}, format='json')
+refresh_view = TokenRefreshView.as_view()
+response = refresh_view(request)
+token_data = response.data
+# Новый токен доступа
+new_access_token_2 = token_data.get("access")
+print(new_access_token_2 == access_token2, new_access_token_2)  # False ...
 ```
 
+`jti` (JSON Web Token ID) является уникальным идентификатором, который присваивается каждому JWT (JSON Web Token) 
+идентифицирующего его. Это поле может быть полезным в нескольких задачах и сценариях:
+
+* `Управление черным списком токенов`: Как уже обсуждалось, `jti` может использоваться для идентификации и добавления 
+токена в черный список. Это позволяет отзывать (блокировать) токены и предотвращать их повторное использование после 
+выхода из системы или в случае компрометации.
 
 
-Блокировка токенов обновления (refresh tokens) часто используется для более гибкого управления безопасностью и сессиями пользователей. Вот несколько причин, почему блокируются именно токены обновления, а не токены доступа:
-
-* Длительность сессии: Токены обновления имеют более долгий срок действия по сравнению с токенами доступа. Это позволяет пользователям оставаться залогиненными на длительное время, даже если токен доступа истек. Блокируя токен обновления, вы можете управлять длительностью сессии пользователя.
-
-* Большая безопасность: Токены обновления обычно хранятся в безопасном месте на стороне клиента (например, в куки или хранилище сессий) и имеют ограниченное время жизни. Это делает их менее подверженными атакам, связанным с утечкой токенов, чем токены доступа, которые часто передаются в заголовках запросов.
-
-* Управление сессиями: Блокировка токенов обновления позволяет администраторам и администраторам безопасности управлять активными сессиями пользователей. Если, например, пользователь заблокирован или выходит из системы, администратор может немедленно прекратить действие его сессии, добавив токен обновления в черный список.
-
-* Повышение безопасности: Если токен доступа утек или был скомпрометирован, администратор может заблокировать все сессии пользователя, удалив все его токены обновления из черного списка. Это увеличивает безопасность при нарушении безопасности.
-
-* Ограниченное использование: Токены обновления могут быть настроены на одноразовое использование. То есть после использования токена обновления для получения нового токена доступа, он больше не может быть использован повторно. Это дополнительный уровень безопасности.
-
-Общий подход заключается в том, что токены обновления более долгосрочны и управляемы администратором, в то время как токены доступа более короткосрочны и используются для конкретных операций. Таким образом, блокировка токенов обновления позволяет управлять активными сессиями и повышать безопасность приложения.
+* `Отслеживание активных сеансов`: Вы можете использовать `jti`, чтобы отслеживать активные сеансы аутентификации 
+пользователей. Каждый раз, когда пользователь выполняет вход, вы можете создавать новый JWT с уникальным `jti`, и сохранять 
+его в базе данных. Это позволит вам узнавать, какие сеансы аутентификации активны в данный момент.
 
 
+* `Аудит и журналирование`: `jti` можно использовать для аудита и журналирования действий пользователей. Вы можете 
+записывать `jti` токена в журнал каждый раз, когда токен выпускается или используется, чтобы иметь возможность отслеживать, 
+когда и какие токены были созданы или использованы.
 
 
+* `Разделение сроков действия токенов`: Если у вас есть несколько типов токенов с разными сроками действия (например, 
+токены доступа и токены обновления), то `jti` может использоваться для их отличия. Каждый тип токена может иметь свой 
+уникальный `jti` формата, что помогает различать их.
 
 
+* `Запросы на проверку статуса токена`: При необходимости клиент может делать запросы на проверку статуса токена, 
+предоставляя `jti` в запросе. Это позволяет клиенту узнать, является ли токен действительным.
 
-
-
-
-
-
-
-
-
+Общим назначением `jti` является идентификация и управление токенами в системе аутентификации и авторизации. 
+Этот уникальный идентификатор позволяет точно определить конкретный JWT и выполнить с ним необходимые действия.
 
 
 ###### Настройка пользовательских заявок на токены
