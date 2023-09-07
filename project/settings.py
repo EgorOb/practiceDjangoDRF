@@ -68,6 +68,11 @@ MIDDLEWARE = [
 #     "BLACKLIST_AFTER_ROTATION": True,
 # }
 
+# SIMPLE_JWT = {
+#     "TOKEN_OBTAIN_SERIALIZER": "app.serializers.MyTokenObtainPairSerializer"
+# }
+
+
 ROOT_URLCONF = 'project.urls'
 
 TEMPLATES = [

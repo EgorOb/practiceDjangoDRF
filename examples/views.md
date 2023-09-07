@@ -1,3 +1,8 @@
+## Навигация
+
+
+
+## Общее
 Код представлений можно посмотреть по пути `venv\Lib\site-packages\rest_framework\views.py`
 
 Код представлений можно посмотреть по пути `venv\Lib\site-packages\rest_framework\generics.py`
@@ -2294,9 +2299,161 @@ print(new_access_token_2 == access_token2, new_access_token_2)  # False ...
 
 ###### Настройка пользовательских заявок на токены
 [Документация](https://django-rest-framework-simplejwt.readthedocs.io/en/latest/customizing_token_claims.html)
-Если необходимо 
+
+Если вы хотите настроить возращаемые данные, содержащиеся в веб-токенах, которые создаются представлениями 
+`TokenObtainPairView` и `TokenObtainSlidingView`, создайте подкласс для нужного представления, а также подкласс для 
+соответствующего сериализатора. 
+
+Вот пример того, как настроить утверждения в токенах, сгенерированных `TokenObtainPairView`
+
+Пропишем его в serializers.py приложения app
+
+```python
+# from app in serializers.py
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+
+        # Добавление пользовательских данных
+        token['name'] = user.username
+        # ...
+
+        return token
+```
+
+Далее необходимо просто этот сериализатор зарегистрировать в SIMPLE_JWT в settings.py
+
+```python
+# Django project settings.py
+...
+
+SIMPLE_JWT = {
+  "TOKEN_OBTAIN_SERIALIZER": "app.serializers.MyTokenObtainPairSerializer",  # Подключаем к соответствующему сериализатору
+}
+```
+
+Тогда проверочный код можно представить как:
+
+```python
+from rest_framework.test import APIRequestFactory
+
+# Создаем объект RequestFactory
+factory = APIRequestFactory()
+
+user_data = {
+    "username": "admin",
+    "password": "123"
+}
+
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken, OutstandingToken
+
+OutstandingToken.objects.all().delete()  # Очистка БД от передыдущих токенов в системе
+# Обработчик JWT для получения токена
+token_view = TokenObtainPairView.as_view()
+# Передаём запрос на получение токена для пользователя
+request = factory.post('/token/', user_data, format='json')
+response = token_view(request)
+# Как только отработал обработчик создания токена, то в таблице Outstanding tokens БД создался действующий токен
+token_data = response.data  # {"access": ..., "refresh": ...}
+# Токен доступа
+access_token = token_data.get("access")
+refresh_token = token_data.get("refresh")
+# Для получения данных об name необходимо декодировать токен
+data_token_refresh = RefreshToken(refresh_token)
+print(repr(data_token_refresh))  # {'token_type': 'refresh', 'exp': 1694174402, 'iat': 1694088002,
+# 'jti': 'a48b45c16be049429b62056dd1988e12', 'user_id': 1, 'name': 'admin'}
+```
+
+Также можно сделать свое представление на базе `TokenObtainPairView`
+
+Допустим стоит задача блокировки пользователя, по умолчанию есть возможность всегда использовать  `TokenObtainPairView` 
+для получения токена. Создадим `CustomTokenObtainPairView` на базе `TokenObtainPairView`, чтобы иметь возможность не
+давать доступ к получению токенов заблокированным пользователям.
+
+Допустим будем считать пользователя заблокированным, если у модели `User` поле `is_active` будет равно `False`(по умолчанию
+в таком виде представление не будет обрабатывать запрос, так как у системы есть такой механизм блокировки, но как пример
+опишем его. Также можно создать поле допустим `is_blocked` в любой таблице и обращаться к этому полю).
+
+Новый обработчик может выглядеть так
+
+```python
+class CustomTokenObtainPairView(TokenObtainPairView):
+    def post(self, request, *args, **kwargs):
+        # Получаем пользователя по имени пользователя или email (в зависимости от ваших настроек)
+        user = User.objects.get(username=request.data['username'])
+
+        if user and user.is_active:
+            # Если пользователь не заблокирован, продолжаем создавать токен
+            return super().post(request, *args, **kwargs)
+        else:
+            return Response({'detail': 'Учетная запись заблокирована.'}, status=status.HTTP_401_UNAUTHORIZED)
+```
+
+А полный код так
+
+```python
+from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory
+from rest_framework import status  # Импортируем статусы HTTP
+
+# Создаем объект RequestFactory
+factory = APIRequestFactory()
+
+user_data = {
+    "username": "admin",
+    "password": "123"
+}
+
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import OutstandingToken
+from django.contrib.auth.models import User
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    def post(self, request, *args, **kwargs):
+        # Получаем пользователя по имени пользователя или email (в зависимости от ваших настроек)
+        user = User.objects.get(username=request.data['username'])
+
+        if user and user.is_active:
+            # Если пользователь не заблокирован, продолжаем создавать токен
+            return super().post(request, *args, **kwargs)
+        else:
+            return Response({'detail': 'Учетная запись заблокирована.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+OutstandingToken.objects.all().delete()  # Очистка БД от передыдущих токенов в системе
+# Обработчик JWT для получения токена
+token_view = CustomTokenObtainPairView.as_view()
+# Передаём запрос на получение токена для пользователя
+request = factory.post('/token/', user_data, format='json')
+response = token_view(request)
+print(response.status_code)  # 200
+print(response.data)  # {"refresh": ..., "access": ...}
+
+# Теперь заблокируем пользователя
+user = User.objects.get(username=user_data['username'])
+user.is_active = False
+user.save()
+
+request = factory.post('/token/', user_data, format='json')
+response = token_view(request)
+print(response.status_code)  # 401
+print(response.data)  # {'detail': 'Учетная запись заблокирована.'}
+
+# Разблокируем пользователя
+user.is_active = True
+user.save()
+
+request = factory.post('/token/', user_data, format='json')
+response = token_view(request)
+print(response.status_code)  # 200
+print(response.data)  # {"refresh": ..., "access": ...}
+```
 
 #### 1.2.4 Ограничение скорости запросов с throttle_classes
+
 
 #### 1.2.5 Получение данных с использованием пагинации
 
