@@ -55,6 +55,13 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '1/minute',
+        'user': '2/minute',
+    }
+}
+
 # AUTHENTICATION_BACKENDS= [
 #     'django.contrib.auth.backends.ModelBackend',
 #     'django.contrib.auth.backends.RemoteUserBackend',
